@@ -415,8 +415,11 @@ public class PlayerActivity extends Activity {
         mediaItem.setSubtitleConfigurations(subtitleConfigurations);
         DefaultMediaSourceFactory sourceFactory = new DefaultMediaSourceFactory(new SmbDataSource.Factory(buildContext()))
                 .setLoadErrorHandlingPolicy(new DefaultLoadErrorHandlingPolicy(MAX_PLAYBACK_RETRIES));
-        player.stop();
+        player.pause();
+        player.clearMediaItems();
+        playerView.setPlayer(null);
         player.setMediaSource(sourceFactory.createMediaSource(mediaItem.build()));
+        playerView.setPlayer(player);
         player.prepare();
         player.setPlaybackSpeed(playbackSpeed);
         if (lastPositionMs > 0L) player.seekTo(lastPositionMs);

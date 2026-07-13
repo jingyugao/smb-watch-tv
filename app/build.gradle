@@ -15,7 +15,11 @@ if (versionPropertiesFile.exists()) {
 }
 def buildNumber = (project.findProperty('buildNumber')
         ?: versionProperties.getProperty('BUILD_NUMBER', '0')).toInteger()
-def displayVersion = String.format(Locale.ROOT, '1.3.%03d', buildNumber)
+def displayVersion = project.findProperty('releaseVersion')
+        ?: String.format(Locale.ROOT, '1.3.%03d', buildNumber)
+def numericVersionCode = project.findProperty('releaseVersionCode')
+        ? project.property('releaseVersionCode').toInteger()
+        : 1003000 + buildNumber
 
 android {
     namespace 'com.smbwatch.tv'
@@ -25,7 +29,7 @@ android {
         applicationId 'com.smbwatch.tv'
         minSdk 21
         targetSdk 34
-        versionCode 1003000 + buildNumber
+        versionCode numericVersionCode
         versionName displayVersion
     }
 
