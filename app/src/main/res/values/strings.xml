@@ -1,0 +1,21 @@
+<resources>
+    <string name="app_name">SMB追剧</string>
+    <string name="label_smb_host">SMB IP</string>
+    <string name="label_username">用户名</string>
+    <string name="label_password">密码</string>
+    <string name="btn_add_connection">添加连接</string>
+    <string name="btn_test_connection">测试连接</string>
+    <string name="hint_status">状态</string>
+    <string name="label_playlists">播放列表</string>
+    <string name="tab_recent">最近播放</string>
+    <string name="tab_playlist">播放列表</string>
+    <string name="tab_smb">SMB 管理</string>
+    <string name="section_recent_title">最近播放</string>
+    <string name="section_recent_hint">点击条目立即从上次位置继续播放。</string>
+    <string name="section_playlists_title">播放列表</string>
+    <string name="section_playlists_hint">按名称显示目录，点开直接播放。</string>
+    <string name="label_saved_connections">已保存的连接</string>
+    <string name="btn_label_saving">保存中...</string>
+    <string name="btn_label_testing">测试中...</string>
+    <string name="btn_label_play">播放</string>
+</resources>

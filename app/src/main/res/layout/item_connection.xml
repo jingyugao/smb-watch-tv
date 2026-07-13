@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="12dp"
+    android:background="@drawable/bg_tvwatch_list_row_selector"
+    android:focusable="false"
+    android:clickable="false">
+
+    <View
+        android:layout_width="36dp"
+        android:layout_height="3dp"
+        android:layout_marginBottom="8dp"
+        android:background="#5BC0FF" />
+
+    <TextView
+        android:id="@+id/tv_conn_name"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textColor="#E6FFFFFF"
+        android:textSize="18sp"
+        android:textStyle="bold"
+        android:maxLines="1"
+        android:singleLine="true" />
+
+    <TextView
+        android:id="@+id/tv_conn_url"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textColor="#CCFFFFFF"
+        android:textSize="13sp"
+        android:maxLines="1"
+        android:singleLine="true" />
+
+    <TextView
+        android:id="@+id/tv_conn_account"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textColor="#99FFFFFF"
+        android:textSize="12sp"
+        android:layout_marginTop="4dp" />
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:layout_marginTop="8dp"
+        android:background="#22FFFFFF" />
+</LinearLayout>

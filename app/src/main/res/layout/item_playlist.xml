@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="12dp"
+    android:background="@drawable/bg_tvwatch_list_row_selector"
+    android:focusable="false"
+    android:clickable="false">
+
+    <View
+        android:layout_width="44dp"
+        android:layout_height="4dp"
+        android:layout_marginBottom="10dp"
+        android:background="#8DEBFF" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+
+        <TextView
+            android:id="@+id/tv_playlist_title"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:maxLines="1"
+            android:singleLine="true"
+            android:textColor="#E6FFFFFF"
+            android:textSize="18sp"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/btn_play_playlist"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginLeft="12dp"
+            android:background="@drawable/bg_tvwatch_button_selector"
+            android:minHeight="48dp"
+            android:paddingLeft="24dp"
+            android:paddingRight="24dp"
+            android:paddingTop="10dp"
+            android:paddingBottom="10dp"
+            android:focusable="false"
+            android:focusableInTouchMode="false"
+            android:textColor="#FFFFFFFF"
+            android:text="播放" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/tv_playlist_connection"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textColor="#99FFFFFF"
+        android:textSize="13sp"
+        android:maxLines="1"
+        android:singleLine="true" />
+
+    <TextView
+        android:id="@+id/tv_playlist_path"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textColor="#CCFFFFFF"
+        android:textSize="12sp"
+        android:maxLines="1"
+        android:singleLine="true" />
+
+    <TextView
+        android:id="@+id/tv_playlist_last_episode"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textColor="#99FFFFFF"
+        android:textSize="12sp"
+        android:maxLines="1"
+        android:singleLine="true" />
+
+    <TextView
+        android:id="@+id/tv_playlist_progress"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textColor="#99FFFFFF"
+        android:textSize="12sp" />
+</LinearLayout>

@@ -1,0 +1,23 @@
+# Android and Gradle generated files
+.gradle/
+**/build/
+local.properties
+
+# IDE metadata
+.idea/
+*.iml
+.vscode/
+
+# Native build output
+.cxx/
+.externalNativeBuild/
+
+# Release artifacts and local diagnostics
+*.apk
+*.aab
+captures/
+*.log
+
+# Operating system metadata
+.DS_Store
+Thumbs.db
