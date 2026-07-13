@@ -167,6 +167,15 @@ public class MainActivity extends Activity {
         btnTabRecent.setOnClickListener(v -> showTab(TAB_RECENT));
         btnTabPlaylist.setOnClickListener(v -> showTab(TAB_PLAYLIST));
         btnTabSmb.setOnClickListener(v -> showTab(TAB_SMB));
+        btnTabRecent.setOnFocusChangeListener((v, hasFocus) -> {
+            if (hasFocus) showTab(TAB_RECENT, false);
+        });
+        btnTabPlaylist.setOnFocusChangeListener((v, hasFocus) -> {
+            if (hasFocus) showTab(TAB_PLAYLIST, false);
+        });
+        btnTabSmb.setOnFocusChangeListener((v, hasFocus) -> {
+            if (hasFocus) showTab(TAB_SMB, false);
+        });
 
         lvConnections.setOnItemClickListener((parent, view, position, id) -> {
             if (position < 0 || position >= connections.size()) {
@@ -361,6 +370,10 @@ public class MainActivity extends Activity {
     }
 
     private void showTab(int tab) {
+        showTab(tab, true);
+    }
+
+    private void showTab(int tab, boolean focusContent) {
         selectedTab = tab;
         if (sectionRecent == null || sectionPlaylists == null || sectionSmb == null) {
             return;
@@ -381,6 +394,7 @@ public class MainActivity extends Activity {
 
         if (tab == TAB_RECENT) {
             refreshRecentPlaylists();
+            if (!focusContent) return;
             if (lvRecentPlaylists != null && lvRecentPlaylists.getCount() > 0) {
                 lvRecentPlaylists.requestFocus();
             } else {
@@ -390,6 +404,7 @@ public class MainActivity extends Activity {
         }
         if (tab == TAB_PLAYLIST) {
             refreshPlaylists();
+            if (!focusContent) return;
             if (lvPlaylists != null && lvPlaylists.getCount() > 0) {
                 lvPlaylists.requestFocus();
             } else {
@@ -398,6 +413,7 @@ public class MainActivity extends Activity {
             return;
         }
         if (tab == TAB_SMB) {
+            if (!focusContent) return;
             if (btnDiscoverSmb != null) {
                 btnDiscoverSmb.requestFocus();
             } else if (etSmbHost != null) {

@@ -438,6 +438,10 @@ public class PlayerActivity extends Activity {
             playPrevEpisode();
             return true;
         }
+        if (down && controlsVisible && keyCode == KeyEvent.KEYCODE_DPAD_UP) {
+            hideControls();
+            return true;
+        }
 
         boolean videoFocused = getCurrentFocus() == playerView;
         if (down && videoFocused && (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER)) {
