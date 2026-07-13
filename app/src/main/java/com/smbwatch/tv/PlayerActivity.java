@@ -10,6 +10,7 @@ import android.os.Looper;
 import android.text.TextUtils;
 import android.view.KeyEvent;
 import android.view.View;
+import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.SeekBar;
 import android.widget.TextView;
@@ -28,6 +29,7 @@ import androidx.media3.exoplayer.DefaultLoadControl;
 import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
 import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy;
+import androidx.media3.ui.AspectRatioFrameLayout;
 import androidx.media3.ui.PlayerView;
 
 import org.json.JSONArray;
@@ -84,6 +86,7 @@ public class PlayerActivity extends Activity {
     private ExoPlayer player;
 
     private final ExecutorService ioExecutor = Executors.newSingleThreadExecutor();
+    private final ExecutorService progressExecutor = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final Handler uiHandler = new Handler(Looper.getMainLooper());
     private final List<EpisodeItem> episodes = new ArrayList<>();
@@ -126,6 +129,8 @@ public class PlayerActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_player);
+        enterImmersiveMode();
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
         tvTitle = findViewById(R.id.tv_player_title);
         tvStatus = findViewById(R.id.tv_player_status);
@@ -161,13 +166,14 @@ public class PlayerActivity extends Activity {
 
         loadPlayerPreferences();
         DefaultLoadControl loadControl = new DefaultLoadControl.Builder()
-                .setBufferDurationsMs(30000, 120000, 1500, 3000)
+                .setBufferDurationsMs(45000, 180000, 3000, 5000)
                 .setPrioritizeTimeOverSizeThresholds(true)
                 .build();
         player = new ExoPlayer.Builder(this).setLoadControl(loadControl).build();
         player.setPlaybackSpeed(playbackSpeed);
         playerView.setPlayer(player);
         playerView.setUseController(false);
+        playerView.setResizeMode(AspectRatioFrameLayout.RESIZE_MODE_ZOOM);
         setupControls();
         setupPlayerListener();
         updatePreferenceButtons();
@@ -776,6 +782,14 @@ public class PlayerActivity extends Activity {
         if (TextUtils.isEmpty(safeDir)) return;
         if (TextUtils.isEmpty(safeSource)) safeSource = safeDir;
 
+        String finalSafeSource = safeSource;
+        String finalSafeDir = safeDir;
+        progressExecutor.execute(() -> persistProgress(
+                title, finalSafeSource, finalSafeDir, item, positionMs));
+    }
+
+    private void persistProgress(String title, String safeSource, String safeDir,
+                                 EpisodeItem item, long positionMs) {
         SharedPreferences sp = SecurePreferences.get(this);
         JSONArray arr;
         try { arr = new JSONArray(sp.getString(KEY_PLAYLISTS, "")); }
@@ -913,7 +927,24 @@ public class PlayerActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        enterImmersiveMode();
         startProgressRefresh();
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) enterImmersiveMode();
+    }
+
+    private void enterImmersiveMode() {
+        getWindow().getDecorView().setSystemUiVisibility(
+                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                        | View.SYSTEM_UI_FLAG_FULLSCREEN
+                        | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                        | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                        | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                        | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
     }
 
     @Override
@@ -924,6 +955,7 @@ public class PlayerActivity extends Activity {
         stopProgressRefresh();
         uiHandler.removeCallbacks(hideControlsRunnable);
         ioExecutor.shutdownNow();
+        progressExecutor.shutdown();
         if (playerView != null) playerView.setPlayer(null);
         if (player != null) player.release();
         super.onDestroy();
