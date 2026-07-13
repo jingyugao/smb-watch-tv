@@ -16,7 +16,8 @@ import jcifs.smb.SmbFile;
 import jcifs.smb.SmbRandomAccessFile;
 
 final class SmbDataSource extends BaseDataSource {
-    private static final int READ_AHEAD_SIZE = 1024 * 1024;
+    private static final int READ_AHEAD_SIZE = 4 * 1024 * 1024;
+    private static final int MAX_READ_ATTEMPTS = 3;
     static final class Factory implements DataSource.Factory {
         private final CIFSContext context;
         Factory(CIFSContext context) { this.context = context; }
@@ -109,22 +110,27 @@ final class SmbDataSource extends BaseDataSource {
     private boolean fillReadAheadBuffer() throws IOException {
         int requested = (int) Math.min(readAheadBuffer.length, bytesRemaining);
         if (requested <= 0) return false;
-        int read;
-        try {
-            read = input.read(readAheadBuffer, 0, requested);
-        } catch (IOException firstError) {
+        IOException failure = null;
+        for (int attempt = 1; attempt <= MAX_READ_ATTEMPTS; attempt++) {
             try {
+                int read = input.read(readAheadBuffer, 0, requested);
+                if (read <= 0) return false;
+                readPosition += read;
+                readAheadOffset = 0;
+                readAheadLimit = read;
+                return true;
+            } catch (IOException error) {
+                if (failure == null) failure = error; else failure.addSuppressed(error);
+                if (attempt == MAX_READ_ATTEMPTS) break;
+                try {
+                    Thread.sleep(200L * attempt);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException("SMB 读取已取消", interrupted);
+                }
                 reopenAtCurrentPosition();
-                read = input.read(readAheadBuffer, 0, requested);
-            } catch (IOException retryError) {
-                retryError.addSuppressed(firstError);
-                throw retryError;
             }
         }
-        if (read <= 0) return false;
-        readPosition += read;
-        readAheadOffset = 0;
-        readAheadLimit = read;
-        return true;
+        throw failure == null ? new IOException("SMB 读取失败") : failure;
     }
 }

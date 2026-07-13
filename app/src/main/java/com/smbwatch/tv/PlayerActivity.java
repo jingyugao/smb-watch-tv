@@ -3,6 +3,8 @@ package com.smbwatch.tv;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.SharedPreferences;
+import android.graphics.Color;
+import android.graphics.Typeface;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
@@ -27,11 +29,15 @@ import androidx.media3.common.Player;
 import androidx.media3.common.TrackSelectionOverride;
 import androidx.media3.common.Tracks;
 import androidx.media3.exoplayer.DefaultLoadControl;
+import androidx.media3.exoplayer.DefaultRenderersFactory;
 import androidx.media3.exoplayer.ExoPlayer;
+import androidx.media3.exoplayer.analytics.AnalyticsListener;
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
 import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy;
 import androidx.media3.ui.AspectRatioFrameLayout;
+import androidx.media3.ui.CaptionStyleCompat;
 import androidx.media3.ui.PlayerView;
+import androidx.media3.ui.SubtitleView;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -61,11 +67,14 @@ public class PlayerActivity extends Activity {
     private static final String KEY_SEEK_STEP = "player_seek_step";
     private static final String KEY_AUDIO_INDEX = "player_audio_index";
     private static final String KEY_TEXT_INDEX = "player_text_index";
+    private static final String KEY_TEXT_ENABLED = "player_text_enabled";
+    private static final String KEY_RESIZE_MODE = "player_resize_mode";
     private static final int PROGRESS_INTERVAL_MS = 700;
     private static final long AUTO_NEXT_DELAY_MS = 5000L;
     private static final long AUTO_SAVE_INTERVAL_MS = 5000L;
     private static final long CONTROLS_TIMEOUT_MS = 6000L;
     private static final int MAX_PLAYBACK_RETRIES = 3;
+    private static final int TARGET_BUFFER_BYTES = 192 * 1024 * 1024;
     private static final float[] SPEEDS = {0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f};
     private static final long[] SEEK_STEPS = {10000L, 30000L, 60000L};
 
@@ -73,6 +82,7 @@ public class PlayerActivity extends Activity {
     private TextView tvStatus;
     private TextView tvProgress;
     private TextView tvDuration;
+    private TextView tvDiagnostics;
     private SeekBar sbProgress;
     private Button btnPrev;
     private Button btnPlay;
@@ -81,6 +91,8 @@ public class PlayerActivity extends Activity {
     private Button btnAudioTrack;
     private Button btnSubtitleTrack;
     private Button btnSeekStep;
+    private Button btnResizeMode;
+    private Button btnPlaybackInfo;
     private PlayerView playerView;
     private View playerControls;
     private boolean controlsVisible;
@@ -120,6 +132,10 @@ public class PlayerActivity extends Activity {
     private int playbackRetryCount;
     private int preferredAudioIndex = -1;
     private int preferredTextIndex = -1;
+    private int resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT;
+    private boolean textTracksEnabled = true;
+    private long bandwidthEstimate;
+    private int droppedVideoFrames;
     private boolean isSeeking;
     private boolean isDestroying;
     private boolean applyingRememberedTracks;
@@ -138,6 +154,7 @@ public class PlayerActivity extends Activity {
         tvStatus = findViewById(R.id.tv_player_status);
         tvProgress = findViewById(R.id.tv_progress_current);
         tvDuration = findViewById(R.id.tv_progress_total);
+        tvDiagnostics = findViewById(R.id.tv_player_diagnostics);
         sbProgress = findViewById(R.id.sb_progress);
         btnPrev = findViewById(R.id.btn_prev_episode);
         btnPlay = findViewById(R.id.btn_play_toggle);
@@ -146,9 +163,12 @@ public class PlayerActivity extends Activity {
         btnAudioTrack = findViewById(R.id.btn_audio_track);
         btnSubtitleTrack = findViewById(R.id.btn_subtitle_track);
         btnSeekStep = findViewById(R.id.btn_seek_step);
+        btnResizeMode = findViewById(R.id.btn_resize_mode);
+        btnPlaybackInfo = findViewById(R.id.btn_playback_info);
         playerView = findViewById(R.id.player_view);
         playerControls = findViewById(R.id.player_controls);
         playerControls.setVisibility(View.GONE);
+        configureSubtitleStyle();
 
         connectionName = valueOrEmpty(getIntent().getStringExtra(EXTRA_CONN_NAME));
         sourceUrl = valueOrEmpty(getIntent().getStringExtra(EXTRA_SOURCE_URL));
@@ -168,20 +188,40 @@ public class PlayerActivity extends Activity {
 
         loadPlayerPreferences();
         DefaultLoadControl loadControl = new DefaultLoadControl.Builder()
-                .setBufferDurationsMs(45000, 180000, 3000, 5000)
-                .setPrioritizeTimeOverSizeThresholds(true)
+                .setBufferDurationsMs(20000, 90000, 2500, 5000)
+                .setTargetBufferBytes(TARGET_BUFFER_BYTES)
+                .setPrioritizeTimeOverSizeThresholds(false)
                 .build();
-        player = new ExoPlayer.Builder(this).setLoadControl(loadControl).build();
+        DefaultRenderersFactory renderersFactory = new DefaultRenderersFactory(this)
+                .setEnableDecoderFallback(true);
+        player = new ExoPlayer.Builder(this, renderersFactory).setLoadControl(loadControl).build();
         player.setPlaybackSpeed(playbackSpeed);
         playerView.setPlayer(player);
         playerView.setUseController(false);
-        playerView.setResizeMode(AspectRatioFrameLayout.RESIZE_MODE_ZOOM);
+        playerView.setResizeMode(resizeMode);
         setupControls();
         setupPlayerListener();
         updatePreferenceButtons();
         playerView.requestFocus();
         registerRemotePlayback();
         loadEpisodesAndPlay();
+    }
+
+    private void configureSubtitleStyle() {
+        SubtitleView subtitleView = playerView.getSubtitleView();
+        if (subtitleView == null) return;
+
+        subtitleView.setApplyEmbeddedStyles(false);
+        subtitleView.setApplyEmbeddedFontSizes(false);
+        subtitleView.setStyle(new CaptionStyleCompat(
+                Color.WHITE,
+                Color.TRANSPARENT,
+                Color.TRANSPARENT,
+                CaptionStyleCompat.EDGE_TYPE_OUTLINE,
+                Color.BLACK,
+                Typeface.create("sans-serif-medium", Typeface.NORMAL)));
+        subtitleView.setFractionalTextSize(0.053f);
+        subtitleView.setBottomPaddingFraction(0.10f);
     }
 
     private void registerRemotePlayback() {
@@ -229,6 +269,8 @@ public class PlayerActivity extends Activity {
         btnAudioTrack.setOnClickListener(v -> showTrackPicker(C.TRACK_TYPE_AUDIO));
         btnSubtitleTrack.setOnClickListener(v -> showTrackPicker(C.TRACK_TYPE_TEXT));
         btnSeekStep.setOnClickListener(v -> cycleSeekStep());
+        btnResizeMode.setOnClickListener(v -> cycleResizeMode());
+        btnPlaybackInfo.setOnClickListener(v -> showPlaybackInfo());
         findViewById(R.id.btn_replay).setOnClickListener(v -> {
             cancelPendingTransitions();
             if (player != null) {
@@ -256,6 +298,17 @@ public class PlayerActivity extends Activity {
     }
 
     private void setupPlayerListener() {
+        player.addAnalyticsListener(new AnalyticsListener() {
+            @Override public void onBandwidthEstimate(EventTime eventTime, int totalLoadTimeMs,
+                                                        long totalBytesLoaded, long bitrateEstimate) {
+                bandwidthEstimate = bitrateEstimate;
+            }
+
+            @Override public void onDroppedVideoFrames(EventTime eventTime, int droppedFrames,
+                                                        long elapsedMs) {
+                droppedVideoFrames += droppedFrames;
+            }
+        });
         player.addListener(new Player.Listener() {
             @Override public void onPlaybackStateChanged(int state) {
                 if (state == Player.STATE_READY) {
@@ -345,6 +398,8 @@ public class PlayerActivity extends Activity {
         lastAutoSaveAtMs = 0L;
         lastAutoSavePositionMs = -1L;
         playbackRetryCount = 0;
+        bandwidthEstimate = 0L;
+        droppedVideoFrames = 0;
         tvTitle.setText(item.name + "  ·  " + (currentIndex + 1) + "/" + episodes.size());
         uiSetStatus("正在打开：" + item.name);
 
@@ -590,15 +645,23 @@ public class PlayerActivity extends Activity {
             preferredAudioIndex = option.typeIndex;
             SecurePreferences.get(this).edit().putInt(KEY_AUDIO_INDEX, preferredAudioIndex).apply();
         } else {
+            textTracksEnabled = true;
             preferredTextIndex = option.typeIndex;
-            SecurePreferences.get(this).edit().putInt(KEY_TEXT_INDEX, preferredTextIndex).apply();
+            SecurePreferences.get(this).edit()
+                    .putBoolean(KEY_TEXT_ENABLED, true)
+                    .putInt(KEY_TEXT_INDEX, preferredTextIndex)
+                    .apply();
         }
     }
 
     private void disableTextTracks() {
         if (player == null) return;
         preferredTextIndex = -1;
-        SecurePreferences.get(this).edit().putInt(KEY_TEXT_INDEX, -1).apply();
+        textTracksEnabled = false;
+        SecurePreferences.get(this).edit()
+                .putBoolean(KEY_TEXT_ENABLED, false)
+                .putInt(KEY_TEXT_INDEX, -1)
+                .apply();
         player.setTrackSelectionParameters(player.getTrackSelectionParameters().buildUpon()
                 .clearOverridesOfType(C.TRACK_TYPE_TEXT)
                 .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
@@ -611,15 +674,39 @@ public class PlayerActivity extends Activity {
         applyingRememberedTracks = true;
         try {
             if (preferredAudioIndex >= 0) applyRememberedTrack(tracks, C.TRACK_TYPE_AUDIO, preferredAudioIndex);
-            if (preferredTextIndex >= 0) {
+            if (!textTracksEnabled) {
+                player.setTrackSelectionParameters(player.getTrackSelectionParameters().buildUpon()
+                        .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+                        .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true).build());
+            } else if (preferredTextIndex >= 0) {
                 applyRememberedTrack(tracks, C.TRACK_TYPE_TEXT, preferredTextIndex);
             } else {
-                player.setTrackSelectionParameters(player.getTrackSelectionParameters().buildUpon()
-                        .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true).build());
+                selectPreferredChineseSubtitle(tracks);
             }
         } finally {
             applyingRememberedTracks = false;
         }
+    }
+
+    private void selectPreferredChineseSubtitle(Tracks tracks) {
+        TrackOption best = null;
+        int bestScore = -1;
+        for (TrackOption option : collectTrackOptions(tracks, C.TRACK_TYPE_TEXT)) {
+            Format format = option.group.getTrackFormat(option.trackIndex);
+            String language = valueOrEmpty(format.language).toLowerCase(Locale.ROOT);
+            String label = valueOrEmpty(format.label).toLowerCase(Locale.ROOT);
+            int score = 0;
+            if (label.contains("简体") || label.contains("simplified") || label.contains("hans")) score = 100;
+            else if (language.contains("zh-cn") || language.contains("zh-hans")) score = 95;
+            else if (language.equals("chi") || language.equals("zho") || language.equals("zh")) score = 80;
+            else if (label.contains("chinese") || label.contains("中文")) score = 70;
+            else if (collectTrackOptions(tracks, C.TRACK_TYPE_TEXT).size() == 1) score = 10;
+            if (score > bestScore) {
+                best = option;
+                bestScore = score;
+            }
+        }
+        if (best != null && bestScore > 0) applyTrackOption(best, C.TRACK_TYPE_TEXT);
     }
 
     private void applyRememberedTrack(Tracks tracks, int type, int wantedIndex) {
@@ -644,7 +731,7 @@ public class PlayerActivity extends Activity {
         int audioCount = collectTrackOptions(tracks, C.TRACK_TYPE_AUDIO).size();
         int textCount = collectTrackOptions(tracks, C.TRACK_TYPE_TEXT).size();
         btnAudioTrack.setText("音轨 " + audioCount);
-        btnSubtitleTrack.setText(preferredTextIndex < 0 ? "字幕 关闭" : "字幕 " + textCount);
+        btnSubtitleTrack.setText(!textTracksEnabled ? "字幕 关闭" : "字幕 " + textCount);
     }
 
     @Override
@@ -688,6 +775,79 @@ public class PlayerActivity extends Activity {
         sbProgress.setKeyProgressIncrement((int) seekStepMs);
         SecurePreferences.get(this).edit().putLong(KEY_SEEK_STEP, seekStepMs).apply();
         updatePreferenceButtons();
+    }
+
+    private void cycleResizeMode() {
+        if (resizeMode == AspectRatioFrameLayout.RESIZE_MODE_FIT) {
+            resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL;
+        } else if (resizeMode == AspectRatioFrameLayout.RESIZE_MODE_FILL) {
+            resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM;
+        } else {
+            resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT;
+        }
+        playerView.setResizeMode(resizeMode);
+        SecurePreferences.get(this).edit().putInt(KEY_RESIZE_MODE, resizeMode).apply();
+        updatePreferenceButtons();
+    }
+
+    private String resizeModeLabel() {
+        if (resizeMode == AspectRatioFrameLayout.RESIZE_MODE_FILL) return "拉伸";
+        if (resizeMode == AspectRatioFrameLayout.RESIZE_MODE_ZOOM) return "填满";
+        return "适配";
+    }
+
+    private void showPlaybackInfo() {
+        new AlertDialog.Builder(this)
+                .setTitle("播放信息")
+                .setMessage(buildPlaybackInfo(true))
+                .setPositiveButton("关闭", null)
+                .setOnDismissListener(dialog -> scheduleHideControls())
+                .show();
+    }
+
+    private String buildPlaybackInfo(boolean detailed) {
+        if (player == null) return "播放器尚未准备好";
+        Format video = selectedFormat(C.TRACK_TYPE_VIDEO);
+        Format audio = selectedFormat(C.TRACK_TYPE_AUDIO);
+        Format text = selectedFormat(C.TRACK_TYPE_TEXT);
+        long bufferedSeconds = Math.max(0L, player.getTotalBufferedDuration()) / 1000L;
+        String network = bandwidthEstimate > 0L
+                ? String.format(Locale.ROOT, "%.1fMbps", bandwidthEstimate / 1_000_000d)
+                : "检测中";
+        if (!detailed) {
+            return "缓冲 " + bufferedSeconds + "秒  ·  SMB " + network + "  ·  丢帧 " + droppedVideoFrames;
+        }
+        return "视频：" + formatDescription(video, true) + "\n"
+                + "音频：" + formatDescription(audio, false) + "\n"
+                + "字幕：" + (textTracksEnabled ? formatDescription(text, false) : "关闭") + "\n"
+                + "画面：" + resizeModeLabel() + "\n"
+                + "缓冲：" + bufferedSeconds + " 秒\n"
+                + "SMB速度：" + network + "\n"
+                + "累计丢帧：" + droppedVideoFrames;
+    }
+
+    private Format selectedFormat(int type) {
+        for (Tracks.Group group : player.getCurrentTracks().getGroups()) {
+            if (group.getType() != type) continue;
+            for (int i = 0; i < group.length; i++) {
+                if (group.isTrackSelected(i)) return group.getTrackFormat(i);
+            }
+        }
+        return null;
+    }
+
+    private String formatDescription(@Nullable Format format, boolean video) {
+        if (format == null) return "无";
+        String codec = !TextUtils.isEmpty(format.codecs) ? format.codecs
+                : valueOrEmpty(format.sampleMimeType).replace("video/", "").replace("audio/", "");
+        if (video) {
+            String size = format.width > 0 && format.height > 0 ? format.width + "x" + format.height : "未知分辨率";
+            String fps = format.frameRate > 0 ? String.format(Locale.ROOT, " %.3gfps", format.frameRate) : "";
+            return codec + " · " + size + fps;
+        }
+        String channels = format.channelCount > 0 ? " · " + format.channelCount + "声道" : "";
+        String language = TextUtils.isEmpty(format.language) ? "" : " · " + format.language;
+        return codec + channels + language;
     }
 
     private void handlePlaybackError(PlaybackException error) {
@@ -758,6 +918,7 @@ public class PlayerActivity extends Activity {
         sbProgress.setProgress((int) Math.min(Integer.MAX_VALUE, position));
         tvProgress.setText(formatMs(position));
         tvDuration.setText(formatMs(duration));
+        tvDiagnostics.setText(buildPlaybackInfo(false));
         lastPositionMs = position;
         saveProgressIfNeeded(position);
     }
@@ -841,11 +1002,14 @@ public class PlayerActivity extends Activity {
         seekStepMs = preferences.getLong(KEY_SEEK_STEP, SEEK_STEPS[0]);
         preferredAudioIndex = preferences.getInt(KEY_AUDIO_INDEX, -1);
         preferredTextIndex = preferences.getInt(KEY_TEXT_INDEX, -1);
+        textTracksEnabled = preferences.getBoolean(KEY_TEXT_ENABLED, true);
+        resizeMode = preferences.getInt(KEY_RESIZE_MODE, AspectRatioFrameLayout.RESIZE_MODE_FIT);
     }
 
     private void updatePreferenceButtons() {
         btnSpeed.setText("倍速 " + formatSpeed(playbackSpeed));
         btnSeekStep.setText("跳转 " + (seekStepMs / 1000L) + "秒");
+        btnResizeMode.setText("画面 " + resizeModeLabel());
     }
 
     private String trackLabel(Format format, int fallbackIndex) {

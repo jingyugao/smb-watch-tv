@@ -40,6 +40,15 @@
             android:textColor="#BBFFFFFF"
             android:textSize="14sp" />
 
+        <TextView
+            android:id="@+id/tv_player_diagnostics"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="3dp"
+            android:text="缓冲检测中"
+            android:textColor="#8FE7C8"
+            android:textSize="13sp" />
+
         <SeekBar
             android:id="@+id/sb_progress"
             android:layout_width="match_parent"
@@ -177,6 +186,26 @@
                 android:background="@drawable/bg_tvwatch_button_selector"
                 android:nextFocusUp="@id/btn_replay"
                 android:text="跳转 10秒"
+                android:textColor="#FFFFFFFF" />
+
+            <Button
+                android:id="@+id/btn_resize_mode"
+                android:layout_width="wrap_content"
+                android:layout_height="54dp"
+                android:layout_marginStart="8dp"
+                android:background="@drawable/bg_tvwatch_button_selector"
+                android:nextFocusUp="@id/btn_replay"
+                android:text="画面 适配"
+                android:textColor="#FFFFFFFF" />
+
+            <Button
+                android:id="@+id/btn_playback_info"
+                android:layout_width="wrap_content"
+                android:layout_height="54dp"
+                android:layout_marginStart="8dp"
+                android:background="@drawable/bg_tvwatch_button_selector"
+                android:nextFocusUp="@id/btn_replay"
+                android:text="播放信息"
                 android:textColor="#FFFFFFFF" />
         </LinearLayout>
     </LinearLayout>
