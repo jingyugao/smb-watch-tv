@@ -120,6 +120,7 @@ public class PlayerActivity extends Activity {
     private boolean isDestroying;
     private boolean applyingRememberedTracks;
     private float playbackSpeed = 1f;
+    private RemoteControlManager.PlaybackBridge remotePlaybackBridge;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -171,7 +172,45 @@ public class PlayerActivity extends Activity {
         setupPlayerListener();
         updatePreferenceButtons();
         playerView.requestFocus();
+        registerRemotePlayback();
         loadEpisodesAndPlay();
+    }
+
+    private void registerRemotePlayback() {
+        remotePlaybackBridge = new RemoteControlManager.PlaybackBridge() {
+            @Override public JSONObject state() {
+                JSONObject result = new JSONObject();
+                try {
+                    result.put("active", true);
+                    result.put("title", tvTitle == null ? "" : tvTitle.getText());
+                    result.put("status", tvStatus == null ? "" : tvStatus.getText());
+                    result.put("playing", player != null && player.isPlaying());
+                    result.put("position", currentPosition());
+                    result.put("duration", player == null ? 0L : Math.max(0L, player.getDuration()));
+                    result.put("speed", playbackSpeed);
+                } catch (JSONException ignored) { }
+                return result;
+            }
+
+            @Override public void action(String action, JSONObject data) {
+                switch (action) {
+                    case "toggle": togglePlayPause(); break;
+                    case "next": playNextEpisode(); break;
+                    case "previous": playPrevEpisode(); break;
+                    case "seek": seekBy(data.optLong("offset", 0L)); break;
+                    case "speed":
+                        float speed = (float) data.optDouble("speed", 1d);
+                        if (speed >= 0.5f && speed <= 2f) {
+                            playbackSpeed = speed;
+                            if (player != null) player.setPlaybackSpeed(speed);
+                            SecurePreferences.get(PlayerActivity.this).edit().putFloat(KEY_SPEED, speed).apply();
+                            updatePreferenceButtons();
+                        }
+                        break;
+                }
+            }
+        };
+        RemoteControlManager.get(this).setPlaybackBridge(remotePlaybackBridge);
     }
 
     private void setupControls() {
@@ -880,6 +919,7 @@ public class PlayerActivity extends Activity {
     @Override
     protected void onDestroy() {
         isDestroying = true;
+        RemoteControlManager.get(this).clearPlaybackBridge(remotePlaybackBridge);
         cancelPendingTransitions();
         stopProgressRefresh();
         uiHandler.removeCallbacks(hideControlsRunnable);

@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Intent;
 import android.graphics.Color;
+import android.graphics.Bitmap;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
@@ -16,6 +17,8 @@ import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.ListView;
+import android.widget.ImageView;
+import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -63,6 +66,8 @@ public class MainActivity extends Activity {
     private Button btnAddConnection;
     private Button btnTestConnection;
     private Button btnDiscoverSmb;
+    private Button btnCleanInvalidPlaylists;
+    private Button btnRemoteControl;
     private Button btnTabRecent;
     private Button btnTabPlaylist;
     private Button btnTabSmb;
@@ -80,6 +85,7 @@ public class MainActivity extends Activity {
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private boolean isSavingConnection;
     private boolean isTestingConnection;
+    private boolean isCleaningPlaylists;
     private SmbDiscovery smbDiscovery;
     private final Map<String, SmbDiscovery.Device> discoveredDevices = new LinkedHashMap<>();
     private int selectedTab = TAB_RECENT;
@@ -101,6 +107,8 @@ public class MainActivity extends Activity {
         btnAddConnection = findViewById(R.id.btn_add_connection);
         btnTestConnection = findViewById(R.id.btn_test_connection);
         btnDiscoverSmb = findViewById(R.id.btn_discover_smb);
+        btnCleanInvalidPlaylists = findViewById(R.id.btn_clean_invalid_playlists);
+        btnRemoteControl = findViewById(R.id.btn_remote_control);
         btnTabRecent = findViewById(R.id.btn_tab_recent);
         btnTabPlaylist = findViewById(R.id.btn_tab_playlist);
         btnTabSmb = findViewById(R.id.btn_tab_smb);
@@ -148,6 +156,14 @@ public class MainActivity extends Activity {
             testCurrentInput();
         });
         btnDiscoverSmb.setOnClickListener(v -> startSmbDiscovery());
+        btnCleanInvalidPlaylists.setOnClickListener(v -> cleanInvalidPlaylists());
+        btnRemoteControl.setOnClickListener(v -> showRemoteControl());
+        RemoteControlManager.get(this).setLibraryChangeListener(() -> {
+            reloadDataFromStorage();
+            refreshConnections();
+            refreshPlaylists();
+            refreshRecentPlaylists();
+        });
         btnTabRecent.setOnClickListener(v -> showTab(TAB_RECENT));
         btnTabPlaylist.setOnClickListener(v -> showTab(TAB_PLAYLIST));
         btnTabSmb.setOnClickListener(v -> showTab(TAB_SMB));
@@ -427,12 +443,11 @@ public class MainActivity extends Activity {
         }
 
         PlaylistItem previous = null;
-        for (int i = 0; i < playlists.size(); i++) {
+        for (int i = playlists.size() - 1; i >= 0; i--) {
             PlaylistItem item = playlists.get(i);
-            if (TextUtils.equals(item.sourceUrl, sourceUrl) && TextUtils.equals(item.dirPath, normalizedDir)) {
-                previous = item;
+            if (sameDirectory(item.dirPath, normalizedDir)) {
+                previous = preferredPlaylist(previous, item);
                 playlists.remove(i);
-                break;
             }
         }
 
@@ -940,9 +955,134 @@ public class MainActivity extends Activity {
                         createdAt
                 ));
             }
+            if (deduplicatePlaylists()) {
+                savePlaylists();
+            }
             sortPlaylists();
         } catch (JSONException e) {
             // ignore corrupt data
+        }
+    }
+
+    private boolean deduplicatePlaylists() {
+        List<PlaylistItem> unique = new ArrayList<>();
+        boolean changed = false;
+        for (PlaylistItem candidate : playlists) {
+            int duplicateIndex = -1;
+            for (int i = 0; i < unique.size(); i++) {
+                if (sameDirectory(unique.get(i).dirPath, candidate.dirPath)) {
+                    duplicateIndex = i;
+                    break;
+                }
+            }
+            if (duplicateIndex < 0) {
+                unique.add(candidate);
+            } else {
+                unique.set(duplicateIndex, preferredPlaylist(unique.get(duplicateIndex), candidate));
+                changed = true;
+            }
+        }
+        if (changed) {
+            playlists.clear();
+            playlists.addAll(unique);
+        }
+        return changed;
+    }
+
+    private PlaylistItem preferredPlaylist(PlaylistItem left, PlaylistItem right) {
+        if (left == null) return right;
+        if (right == null) return left;
+        boolean leftHasProgress = !TextUtils.isEmpty(left.lastEpisodePath) || left.lastEpisodePositionMs > 0L;
+        boolean rightHasProgress = !TextUtils.isEmpty(right.lastEpisodePath) || right.lastEpisodePositionMs > 0L;
+        if (leftHasProgress != rightHasProgress) return rightHasProgress ? right : left;
+        return right.createdAt >= left.createdAt ? right : left;
+    }
+
+    private boolean sameDirectory(String left, String right) {
+        String normalizedLeft = ensureTrailingSlash(left == null ? "" : left);
+        String normalizedRight = ensureTrailingSlash(right == null ? "" : right);
+        return !TextUtils.isEmpty(normalizedLeft) && normalizedLeft.equalsIgnoreCase(normalizedRight);
+    }
+
+    private void cleanInvalidPlaylists() {
+        if (isCleaningPlaylists) {
+            toast("正在检查播放列表");
+            return;
+        }
+        if (playlists.isEmpty()) {
+            toast("播放列表为空");
+            return;
+        }
+
+        isCleaningPlaylists = true;
+        btnCleanInvalidPlaylists.setEnabled(false);
+        btnCleanInvalidPlaylists.setText("检查中...");
+        List<PlaylistItem> snapshot = new ArrayList<>(playlists);
+        ioExecutor.execute(() -> {
+            List<String> invalidDirectories = new ArrayList<>();
+            int unavailableCount = 0;
+            for (PlaylistItem item : snapshot) {
+                if (Thread.currentThread().isInterrupted()) return;
+                try {
+                    SmbFile directory = new SmbFile(
+                            ensureTrailingSlash(item.dirPath),
+                            buildSmbContext(item.username, item.password));
+                    if (!directory.exists() || !directory.isDirectory()) {
+                        invalidDirectories.add(item.dirPath);
+                    }
+                } catch (Exception ignored) {
+                    unavailableCount++;
+                }
+            }
+
+            int finalUnavailableCount = unavailableCount;
+            mainHandler.post(() -> {
+                int before = playlists.size();
+                playlists.removeIf(item -> {
+                    for (String invalidDirectory : invalidDirectories) {
+                        if (sameDirectory(item.dirPath, invalidDirectory)) return true;
+                    }
+                    return false;
+                });
+                boolean deduplicated = deduplicatePlaylists();
+                int removed = before - playlists.size();
+                if (removed > 0 || deduplicated) savePlaylists();
+                refreshPlaylists();
+                refreshRecentPlaylists();
+                isCleaningPlaylists = false;
+                btnCleanInvalidPlaylists.setEnabled(true);
+                btnCleanInvalidPlaylists.setText("清理失效列表");
+                String result = removed > 0 ? "已清理 " + removed + " 个失效列表" : "没有失效列表";
+                if (finalUnavailableCount > 0) result += "，" + finalUnavailableCount + " 个暂时无法确认";
+                toast(result);
+            });
+        });
+    }
+
+    private void showRemoteControl() {
+        RemoteControlManager remote = RemoteControlManager.get(this);
+        try {
+            remote.start();
+            String address = remote.getPairingUrl();
+            Bitmap qr = remote.createQrCode(420);
+            LinearLayout content = new LinearLayout(this);
+            content.setOrientation(LinearLayout.VERTICAL);
+            content.setPadding(36, 24, 36, 12);
+            TextView hint = new TextView(this);
+            hint.setText("手机与电视连接同一局域网后扫码\n" + address.substring(0, address.indexOf('#')));
+            hint.setTextColor(Color.WHITE);
+            hint.setTextSize(18f);
+            content.addView(hint);
+            ImageView image = new ImageView(this);
+            image.setImageBitmap(qr);
+            content.addView(image, new LinearLayout.LayoutParams(420, 420));
+            new AlertDialog.Builder(this)
+                    .setTitle("手机遥控与 SMB 管理")
+                    .setView(content)
+                    .setNegativeButton("关闭", null)
+                    .show();
+        } catch (Exception e) {
+            toast("启动手机遥控失败：" + e.getMessage());
         }
     }
 
