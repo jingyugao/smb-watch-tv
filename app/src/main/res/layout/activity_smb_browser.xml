@@ -42,7 +42,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="10dp"
-            android:text="点击文件夹继续浏览，点击视频文件直接播放；底部按钮可直接将当前目录加入播放列表。"
+            android:text="添加当前目录后，会扫描它和所有子目录；每个直接包含视频的文件夹生成一个独立播放列表。"
             android:textColor="#CCFFFFFF"
             android:textSize="14sp" />
     </LinearLayout>
@@ -67,7 +67,7 @@
         android:layout_height="68dp"
         android:layout_marginTop="10dp"
         android:background="@drawable/bg_tvwatch_button_selector"
-        android:text="将当前目录加入播放列表"
+        android:text="扫描当前目录并生成播放列表"
         android:textColor="#FFFFFFFF"
         android:textStyle="bold"
         android:textSize="20sp"

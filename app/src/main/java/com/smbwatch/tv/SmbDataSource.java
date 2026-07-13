@@ -10,10 +10,10 @@ import androidx.media3.datasource.DataSpec;
 
 import java.io.EOFException;
 import java.io.IOException;
-import java.io.InputStream;
 
 import jcifs.CIFSContext;
 import jcifs.smb.SmbFile;
+import jcifs.smb.SmbRandomAccessFile;
 
 final class SmbDataSource extends BaseDataSource {
     static final class Factory implements DataSource.Factory {
@@ -23,9 +23,11 @@ final class SmbDataSource extends BaseDataSource {
     }
 
     private final CIFSContext context;
-    private InputStream input;
+    private SmbFile file;
+    private SmbRandomAccessFile input;
     private Uri uri;
     private long bytesRemaining;
+    private long readPosition;
     private boolean opened;
 
     private SmbDataSource(CIFSContext context) {
@@ -37,14 +39,14 @@ final class SmbDataSource extends BaseDataSource {
     public long open(DataSpec dataSpec) throws IOException {
         transferInitializing(dataSpec);
         uri = dataSpec.uri;
-        SmbFile file = new SmbFile(uri.toString(), context);
+        file = new SmbFile(uri.toString(), context);
         long fileLength = file.length();
         if (dataSpec.position > fileLength) throw new EOFException("播放位置超过文件长度");
-        input = file.getInputStream();
-        skipFully(input, dataSpec.position);
+        openAt(dataSpec.position);
         bytesRemaining = dataSpec.length == C.LENGTH_UNSET
                 ? fileLength - dataSpec.position
                 : Math.min(dataSpec.length, fileLength - dataSpec.position);
+        readPosition = dataSpec.position;
         opened = true;
         transferStarted(dataSpec);
         return bytesRemaining;
@@ -55,9 +57,21 @@ final class SmbDataSource extends BaseDataSource {
         if (length == 0) return 0;
         if (bytesRemaining == 0L) return C.RESULT_END_OF_INPUT;
         int requested = (int) Math.min(length, bytesRemaining);
-        int read = input.read(buffer, offset, requested);
+        int read;
+        try {
+            read = input.read(buffer, offset, requested);
+        } catch (IOException firstError) {
+            try {
+                reopenAtCurrentPosition();
+                read = input.read(buffer, offset, requested);
+            } catch (IOException retryError) {
+                retryError.addSuppressed(firstError);
+                throw retryError;
+            }
+        }
         if (read < 0) return C.RESULT_END_OF_INPUT;
         bytesRemaining -= read;
+        readPosition += read;
         bytesTransferred(read);
         return read;
     }
@@ -73,6 +87,8 @@ final class SmbDataSource extends BaseDataSource {
             if (input != null) input.close();
         } finally {
             input = null;
+            file = null;
+            readPosition = 0L;
             if (opened) {
                 opened = false;
                 transferEnded();
@@ -80,17 +96,16 @@ final class SmbDataSource extends BaseDataSource {
         }
     }
 
-    private static void skipFully(InputStream input, long bytes) throws IOException {
-        long remaining = bytes;
-        while (remaining > 0L) {
-            long skipped = input.skip(remaining);
-            if (skipped > 0L) {
-                remaining -= skipped;
-            } else if (input.read() < 0) {
-                throw new EOFException("无法定位到播放位置");
-            } else {
-                remaining--;
-            }
+    private void openAt(long position) throws IOException {
+        input = new SmbRandomAccessFile(file, "r");
+        input.seek(position);
+    }
+
+    private void reopenAtCurrentPosition() throws IOException {
+        if (input != null) {
+            try { input.close(); } catch (IOException ignored) { }
         }
+        if (file == null) throw new IOException("SMB 文件连接已关闭");
+        openAt(readPosition);
     }
 }

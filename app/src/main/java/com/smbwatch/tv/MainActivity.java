@@ -29,7 +29,9 @@ import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.UnknownHostException;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -60,6 +62,7 @@ public class MainActivity extends Activity {
     private ListView lvRecentPlaylists;
     private Button btnAddConnection;
     private Button btnTestConnection;
+    private Button btnDiscoverSmb;
     private Button btnTabRecent;
     private Button btnTabPlaylist;
     private Button btnTabSmb;
@@ -77,6 +80,8 @@ public class MainActivity extends Activity {
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private boolean isSavingConnection;
     private boolean isTestingConnection;
+    private SmbDiscovery smbDiscovery;
+    private final Map<String, SmbDiscovery.Device> discoveredDevices = new LinkedHashMap<>();
     private int selectedTab = TAB_RECENT;
 
     @Override
@@ -95,6 +100,7 @@ public class MainActivity extends Activity {
 
         btnAddConnection = findViewById(R.id.btn_add_connection);
         btnTestConnection = findViewById(R.id.btn_test_connection);
+        btnDiscoverSmb = findViewById(R.id.btn_discover_smb);
         btnTabRecent = findViewById(R.id.btn_tab_recent);
         btnTabPlaylist = findViewById(R.id.btn_tab_playlist);
         btnTabSmb = findViewById(R.id.btn_tab_smb);
@@ -141,6 +147,7 @@ public class MainActivity extends Activity {
             }
             testCurrentInput();
         });
+        btnDiscoverSmb.setOnClickListener(v -> startSmbDiscovery());
         btnTabRecent.setOnClickListener(v -> showTab(TAB_RECENT));
         btnTabPlaylist.setOnClickListener(v -> showTab(TAB_PLAYLIST));
         btnTabSmb.setOnClickListener(v -> showTab(TAB_SMB));
@@ -174,7 +181,7 @@ public class MainActivity extends Activity {
             if (position < 0 || position >= playlists.size()) {
                 return;
             }
-            openPlaylist(playlists.get(position));
+            openPlaylistDetail(playlists.get(position));
         });
         lvRecentPlaylists.setOnItemClickListener((parent, view, position, id) -> {
             if (position < 0 || position >= recentPlaylists.size()) {
@@ -209,6 +216,19 @@ public class MainActivity extends Activity {
         intent.putExtra(PlayerActivity.EXTRA_PASSWORD, item.password);
         intent.putExtra(PlayerActivity.EXTRA_RESUME_FILE_PATH, item.lastEpisodePath);
         intent.putExtra(PlayerActivity.EXTRA_RESUME_POSITION_MS, item.lastEpisodePositionMs);
+        startActivity(intent);
+    }
+
+    private void openPlaylistDetail(PlaylistItem item) {
+        Intent intent = new Intent(this, PlaylistDetailActivity.class);
+        intent.putExtra(PlaylistDetailActivity.EXTRA_TITLE, item.title);
+        intent.putExtra(PlaylistDetailActivity.EXTRA_CONN_NAME, item.connectionName);
+        intent.putExtra(PlaylistDetailActivity.EXTRA_SOURCE_URL, item.sourceUrl);
+        intent.putExtra(PlaylistDetailActivity.EXTRA_DIRECTORY, item.dirPath);
+        intent.putExtra(PlaylistDetailActivity.EXTRA_USERNAME, item.username);
+        intent.putExtra(PlaylistDetailActivity.EXTRA_PASSWORD, item.password);
+        intent.putExtra(PlaylistDetailActivity.EXTRA_RESUME_PATH, item.lastEpisodePath);
+        intent.putExtra(PlaylistDetailActivity.EXTRA_RESUME_POSITION, item.lastEpisodePositionMs);
         startActivity(intent);
     }
 
@@ -266,21 +286,54 @@ public class MainActivity extends Activity {
             dirName = extractDirectoryName(dirPath);
         }
 
-        upsertPlaylistItem(
-                dirName,
-                connectionName,
-                sourceUrl,
-                username,
-                password,
-                dirPath,
-                lastEpisodeName,
-                lastEpisodePath,
-                lastEpisodePos
-        );
-        if (selectedTab == TAB_RECENT) {
-            refreshRecentPlaylists();
-        }
-        toast("已添加到播放列表：" + dirName);
+        scanAndAddPlaylistFolders(connectionName, sourceUrl, username, password, dirPath,
+                lastEpisodeName, lastEpisodePath, lastEpisodePos);
+    }
+
+    private void scanAndAddPlaylistFolders(String connectionName, String sourceUrl, String username,
+                                           String password, String rootPath, String resumeName,
+                                           String resumePath, long resumePosition) {
+        final String safeConnectionName = connectionName;
+        final String safeSourceUrl = sourceUrl;
+        final String safeUsername = username;
+        final String safePassword = password;
+        final String safeRootPath = ensureTrailingSlash(rootPath);
+        tvStatus.setText("正在扫描文件夹并生成播放列表...");
+        ioExecutor.execute(() -> {
+            try {
+                List<SmbPlaylistScanner.Candidate> candidates = SmbPlaylistScanner.scan(
+                        safeRootPath, buildSmbContext(safeUsername, safePassword));
+                mainHandler.post(() -> {
+                    for (SmbPlaylistScanner.Candidate candidate : candidates) {
+                        boolean isSelectedRoot = TextUtils.equals(
+                                ensureTrailingSlash(candidate.directoryPath), safeRootPath);
+                        upsertPlaylistItem(
+                                candidate.title,
+                                safeConnectionName,
+                                safeSourceUrl,
+                                safeUsername,
+                                safePassword,
+                                candidate.directoryPath,
+                                isSelectedRoot ? resumeName : "",
+                                isSelectedRoot ? resumePath : "",
+                                isSelectedRoot ? resumePosition : 0L
+                        );
+                    }
+                    if (candidates.isEmpty()) {
+                        tvStatus.setText("没有找到直接包含视频的文件夹");
+                        toast("没有找到视频列表");
+                    } else {
+                        tvStatus.setText("已生成 " + candidates.size() + " 个播放列表");
+                        toast("已添加 " + candidates.size() + " 个播放列表");
+                    }
+                });
+            } catch (Exception e) {
+                mainHandler.post(() -> {
+                    tvStatus.setText("扫描失败：" + e.getMessage());
+                    toast("扫描目录失败");
+                });
+            }
+        });
     }
 
     private void reloadDataFromStorage() {
@@ -329,10 +382,10 @@ public class MainActivity extends Activity {
             return;
         }
         if (tab == TAB_SMB) {
-            if (etSmbHost != null) {
+            if (btnDiscoverSmb != null) {
+                btnDiscoverSmb.requestFocus();
+            } else if (etSmbHost != null) {
                 etSmbHost.requestFocus();
-            } else if (btnAddConnection != null) {
-                btnAddConnection.requestFocus();
             }
         }
     }
@@ -347,6 +400,22 @@ public class MainActivity extends Activity {
         showTab(selectedTab);
     }
 
+    @Override
+    public void onBackPressed() {
+        View focused = getCurrentFocus();
+        if (focused != btnTabRecent && focused != btnTabPlaylist && focused != btnTabSmb) {
+            if (selectedTab == TAB_RECENT) {
+                btnTabRecent.requestFocus();
+            } else if (selectedTab == TAB_PLAYLIST) {
+                btnTabPlaylist.requestFocus();
+            } else {
+                btnTabSmb.requestFocus();
+            }
+            return;
+        }
+        super.onBackPressed();
+    }
+
     private void upsertPlaylistItem(String title, String connectionName, String sourceUrl, String username, String password,
                                     String dirPath, String lastEpisodeName, String lastEpisodePath, long lastEpisodePosition) {
         String normalizedDir = ensureTrailingSlash(dirPath);
@@ -357,12 +426,20 @@ public class MainActivity extends Activity {
             sourceUrl = normalizedDir;
         }
 
+        PlaylistItem previous = null;
         for (int i = 0; i < playlists.size(); i++) {
             PlaylistItem item = playlists.get(i);
             if (TextUtils.equals(item.sourceUrl, sourceUrl) && TextUtils.equals(item.dirPath, normalizedDir)) {
+                previous = item;
                 playlists.remove(i);
                 break;
             }
+        }
+
+        if (previous != null && TextUtils.isEmpty(lastEpisodePath)) {
+            lastEpisodeName = previous.lastEpisodeName;
+            lastEpisodePath = previous.lastEpisodePath;
+            lastEpisodePosition = previous.lastEpisodePositionMs;
         }
 
         if (TextUtils.isEmpty(lastEpisodeName) && !TextUtils.isEmpty(lastEpisodePath)) {
@@ -379,7 +456,7 @@ public class MainActivity extends Activity {
                 lastEpisodeName,
                 lastEpisodePath,
                 Math.max(0L, lastEpisodePosition),
-                System.currentTimeMillis()
+                previous == null ? System.currentTimeMillis() : previous.createdAt
         ));
         sortPlaylists();
         savePlaylists();
@@ -430,12 +507,23 @@ public class MainActivity extends Activity {
                     String reachMsg = checkSmbConnection(finalUrl, finalUser, finalPass);
                     mainHandler.post(() -> {
                         if (TextUtils.isEmpty(reachMsg)) {
-                            toast("已添加连接：" + finalName);
+                            setSavingConnectionState(false);
+                            toast("已添加连接，开始后台扫描：" + finalName);
+                            scanAndAddPlaylistFolders(
+                                    finalName,
+                                    finalUrl,
+                                    finalUser,
+                                    finalPass,
+                                    finalUrl,
+                                    "",
+                                    "",
+                                    0L
+                            );
                         } else {
                             tvStatus.setText("已保存：" + finalUrl + "（未通过连通性：" + reachMsg + "）");
                             toast("已添加连接，但当前不可达：" + finalName);
+                            setSavingConnectionState(false);
                         }
-                        setSavingConnectionState(false);
                     });
                 });
             });
@@ -490,6 +578,67 @@ public class MainActivity extends Activity {
             btnTestConnection.setEnabled(!testing);
             btnTestConnection.setText(testing ? getString(R.string.btn_label_testing) : getString(R.string.btn_test_connection));
         }
+    }
+
+    private void startSmbDiscovery() {
+        if (smbDiscovery != null) {
+            toast("正在扫描局域网");
+            return;
+        }
+        discoveredDevices.clear();
+        btnDiscoverSmb.setEnabled(false);
+        btnDiscoverSmb.setText(R.string.btn_discovering_smb);
+        tvStatus.setText("正在通过 WS-Discovery 和 TCP 445 扫描局域网...");
+        smbDiscovery = new SmbDiscovery(getApplicationContext(), new SmbDiscovery.Callback() {
+            @Override
+            public void onDeviceFound(SmbDiscovery.Device device) {
+                mainHandler.post(() -> {
+                    discoveredDevices.put(device.host, device);
+                    tvStatus.setText("已发现 " + discoveredDevices.size() + " 台 SMB 设备，继续扫描中...");
+                });
+            }
+
+            @Override
+            public void onFinished(String errorMessage) {
+                mainHandler.post(() -> finishSmbDiscovery(errorMessage));
+            }
+        });
+        smbDiscovery.start();
+    }
+
+    private void finishSmbDiscovery(String errorMessage) {
+        if (smbDiscovery != null) {
+            smbDiscovery.close();
+            smbDiscovery = null;
+        }
+        btnDiscoverSmb.setEnabled(true);
+        btnDiscoverSmb.setText(R.string.btn_discover_smb);
+        if (discoveredDevices.isEmpty()) {
+            String message = TextUtils.isEmpty(errorMessage)
+                    ? "未发现 SMB 设备，请确认电视和服务器在同一局域网"
+                    : "扫描失败：" + errorMessage;
+            tvStatus.setText(message);
+            toast(message);
+            return;
+        }
+
+        List<SmbDiscovery.Device> devices = new ArrayList<>(discoveredDevices.values());
+        String[] labels = new String[devices.size()];
+        for (int i = 0; i < devices.size(); i++) {
+            SmbDiscovery.Device device = devices.get(i);
+            labels[i] = device.host + "    " + device.source;
+        }
+        tvStatus.setText("发现 " + devices.size() + " 台 SMB 设备");
+        new AlertDialog.Builder(this)
+                .setTitle("选择 SMB 设备")
+                .setItems(labels, (dialog, which) -> {
+                    SmbDiscovery.Device selected = devices.get(which);
+                    etSmbHost.setText(selected.host);
+                    etSmbUsername.requestFocus();
+                    tvStatus.setText("已选择：" + selected.host + "，请输入账号密码后测试连接");
+                })
+                .setNegativeButton("取消", null)
+                .show();
     }
 
     private String deriveConnectionNameFromUrl(String smbUrl) {
@@ -968,6 +1117,10 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (smbDiscovery != null) {
+            smbDiscovery.close();
+            smbDiscovery = null;
+        }
         super.onDestroy();
         ioExecutor.shutdownNow();
     }
