@@ -65,6 +65,24 @@ public class AppUpdateManagerTest {
         assertEquals(-1L, AppUpdateManager.effectiveTotalSize(-1L, 0L));
     }
 
+    @Test
+    public void giteeReleaseShapeIsSupportedWithoutAssetSize() throws Exception {
+        String json = "[{\"tag_name\":\"v1.4.0-beta.4\",\"prerelease\":true,"
+                + "\"assets\":["
+                + "{\"name\":\"smb-watch-tv-1.4.0-beta.4-release.apk\","
+                + "\"browser_download_url\":\"https://gitee.example/app.apk\"},"
+                + "{\"name\":\"smb-watch-tv-1.4.0-beta.4.sha256\","
+                + "\"browser_download_url\":\"https://gitee.example/app.sha256\"}"
+                + "]}]";
+
+        AppUpdateManager.Release release = AppUpdateManager.selectUpdate(
+                json, true, 1_040_003);
+
+        assertEquals("v1.4.0-beta.4", release.tagName);
+        assertEquals(1_040_004, release.versionCode);
+        assertEquals(0L, release.apkSize);
+    }
+
     private static String releasesJson() {
         return "["
                 + release("v1.5.0-beta.2", true)

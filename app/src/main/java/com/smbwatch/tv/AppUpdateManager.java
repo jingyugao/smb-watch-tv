@@ -22,11 +22,11 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * 从 GitHub Releases 检查和下载更新。安装授权与界面交互由 Activity 处理。
+ * 从公开的 Gitee Release 镜像检查和下载更新。安装授权与界面交互由 Activity 处理。
  */
 final class AppUpdateManager {
     private static final String RELEASES_URL =
-            "https://api.github.com/repos/jingyugao/smb-watch-tv/releases?per_page=20";
+            "https://gitee.com/api/v5/repos/ggyy00/smb-watch-tv/releases?per_page=20";
     private static final String USER_AGENT = "smb-watch-tv-updater";
     private static final int CONNECT_TIMEOUT_MS = 12_000;
     private static final int READ_TIMEOUT_MS = 30_000;
@@ -290,7 +290,7 @@ final class AppUpdateManager {
             connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
             connection.setReadTimeout(READ_TIMEOUT_MS);
             connection.setInstanceFollowRedirects(false);
-            connection.setRequestProperty("Accept", "application/vnd.github+json, application/octet-stream");
+            connection.setRequestProperty("Accept", "application/json, application/octet-stream");
             connection.setRequestProperty("User-Agent", USER_AGENT);
             int status = connection.getResponseCode();
             if (status >= 300 && status < 400) {
