@@ -83,11 +83,30 @@ jobs:
           gh "${args[@]}"
       - name: Mirror release assets to Gitee
         env:
-          GITEE_ACCESS_TOKEN: ${{ secrets.GITEE_ACCESS_TOKEN }}
-          GITEE_OWNER: ggyy00
-          GITEE_REPO: smb-watch-tv
-          RELEASE_TAG: ${{ github.ref_name }}
-          RELEASE_VERSION: ${{ steps.version.outputs.name }}
+          ALIYUN_SSH_KEY: ${{ secrets.ALIYUN_UPDATE_SSH_KEY }}
+          ALIYUN_KNOWN_HOSTS: ${{ secrets.ALIYUN_KNOWN_HOSTS }}
           PRERELEASE: ${{ steps.version.outputs.prerelease }}
-          ARTIFACT_DIR: app/build/outputs/apk/release
-        run: scripts/publish-gitee-update.sh
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -d -m 0700 "$HOME/.ssh"
+          printf '%s\n' "$ALIYUN_SSH_KEY" >"$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$ALIYUN_KNOWN_HOSTS" >"$HOME/.ssh/known_hosts"
+          chmod 0600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+
+          ssh_options=(
+            -o BatchMode=yes
+            -o ConnectTimeout=15
+            -o ServerAliveInterval=15
+            -o ServerAliveCountMax=3
+          )
+          remote="smbrelease@gaojingyu.top"
+          staging="/srv/smb-watch-tv/incoming/$GITHUB_REF_NAME-$GITHUB_RUN_ID"
+          apk=(app/build/outputs/apk/release/*.apk)
+          checksum="app/build/outputs/apk/release/smb-watch-tv-${{ steps.version.outputs.name }}.sha256"
+
+          ssh "${ssh_options[@]}" "$remote" "install -d -m 0700 '$staging'"
+          timeout 600 scp "${ssh_options[@]}" \
+            "${apk[0]}" "$checksum" "$remote:$staging/"
+          ssh "${ssh_options[@]}" "$remote" \
+            "/home/smbrelease/bin/publish-gitee-release '$GITHUB_REF_NAME' '$PRERELEASE' '$staging'"

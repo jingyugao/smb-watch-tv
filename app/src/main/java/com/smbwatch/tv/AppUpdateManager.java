@@ -26,7 +26,7 @@ import java.util.regex.Pattern;
  */
 final class AppUpdateManager {
     private static final String RELEASES_URL =
-            "https://gitee.com/ggyy00/smb-watch-tv/raw/update-mirror/releases.json";
+            "https://gitee.com/api/v5/repos/ggyy00/smb-watch-tv/releases?per_page=20";
     private static final String USER_AGENT = "smb-watch-tv-updater";
     private static final int CONNECT_TIMEOUT_MS = 12_000;
     private static final int READ_TIMEOUT_MS = 30_000;
