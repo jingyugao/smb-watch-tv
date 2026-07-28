@@ -3,14 +3,16 @@ package com.smbwatch.tv;
 import android.net.Uri;
 import android.text.TextUtils;
 
-import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Deque;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 import jcifs.CIFSContext;
 import jcifs.smb.SmbFile;
@@ -18,6 +20,8 @@ import jcifs.smb.SmbFile;
 final class SmbPlaylistScanner {
     private static final int MAX_DEPTH = 12;
     private static final int MAX_DIRECTORIES = 2000;
+    // SMB 目录枚举以网络往返为主，多线程并发能成倍缩短整体扫描时间
+    private static final int SCAN_THREADS = 4;
 
     static final class Candidate {
         final String title;
@@ -49,53 +53,73 @@ final class SmbPlaylistScanner {
             throw new IllegalStateException("目录不存在或无权访问");
         }
 
-        List<Candidate> candidates = new ArrayList<>();
-        Deque<Pending> pending = new ArrayDeque<>();
-        Set<String> visited = new HashSet<>();
-        pending.add(new Pending(root, 0));
+        List<Candidate> candidates = Collections.synchronizedList(new ArrayList<>());
+        Set<String> visited = ConcurrentHashMap.newKeySet();
+        List<Pending> level = new ArrayList<>();
+        level.add(new Pending(root, 0));
 
-        while (!pending.isEmpty() && visited.size() < MAX_DIRECTORIES) {
-            if (Thread.currentThread().isInterrupted()) throw new InterruptedException("扫描已取消");
-            Pending current = pending.removeFirst();
-            String path = ensureDirectory(current.directory.getPath());
-            if (!visited.add(path)) continue;
-
-            SmbFile[] children;
-            try {
-                children = current.directory.listFiles();
-            } catch (Exception ignored) {
-                continue;
-            }
-            if (children == null) continue;
-
-            int directVideoCount = 0;
-            List<SmbFile> subdirectories = new ArrayList<>();
-            for (SmbFile child : children) {
-                if (child == null) continue;
-                String name = trimSlash(child.getName());
-                if (TextUtils.isEmpty(name)) continue;
-                try {
-                    if (child.isDirectory()) {
-                        if (current.depth < MAX_DEPTH && !shouldSkip(name)) subdirectories.add(child);
-                    } else if (SmbEpisodeScanner.isVideo(name)) {
-                        directVideoCount++;
-                    }
-                } catch (Exception ignored) {
+        ExecutorService pool = Executors.newFixedThreadPool(SCAN_THREADS);
+        try {
+            while (!level.isEmpty() && visited.size() < MAX_DIRECTORIES) {
+                if (Thread.currentThread().isInterrupted()) throw new InterruptedException("扫描已取消");
+                List<Callable<List<Pending>>> tasks = new ArrayList<>(level.size());
+                for (Pending pending : level) {
+                    tasks.add(() -> scanDirectory(pending, candidates, visited));
                 }
+                List<Pending> next = new ArrayList<>();
+                for (Future<List<Pending>> future : pool.invokeAll(tasks)) {
+                    next.addAll(future.get());
+                }
+                level = next;
             }
-
-            if (directVideoCount > 0) {
-                candidates.add(new Candidate(directoryName(path), path, directVideoCount));
-            }
-            Collections.sort(subdirectories, (left, right) -> NaturalOrder.compare(left.getName(), right.getName()));
-            for (SmbFile subdirectory : subdirectories) pending.addLast(new Pending(subdirectory, current.depth + 1));
+        } finally {
+            pool.shutdownNow();
         }
 
-        Collections.sort(candidates, (left, right) -> {
+        List<Candidate> result = new ArrayList<>(candidates);
+        Collections.sort(result, (left, right) -> {
             int title = NaturalOrder.compare(left.title, right.title);
             return title != 0 ? title : left.directoryPath.compareToIgnoreCase(right.directoryPath);
         });
-        return candidates;
+        return result;
+    }
+
+    private static List<Pending> scanDirectory(Pending current, List<Candidate> candidates, Set<String> visited) {
+        if (visited.size() >= MAX_DIRECTORIES) return Collections.emptyList();
+        String path = ensureDirectory(current.directory.getPath());
+        if (!visited.add(path)) return Collections.emptyList();
+
+        SmbFile[] children;
+        try {
+            children = current.directory.listFiles();
+        } catch (Exception ignored) {
+            return Collections.emptyList();
+        }
+        if (children == null) return Collections.emptyList();
+
+        int directVideoCount = 0;
+        List<SmbFile> subdirectories = new ArrayList<>();
+        for (SmbFile child : children) {
+            if (child == null) continue;
+            String name = trimSlash(child.getName());
+            if (TextUtils.isEmpty(name)) continue;
+            try {
+                if (child.isDirectory()) {
+                    if (current.depth < MAX_DEPTH && !shouldSkip(name)) subdirectories.add(child);
+                } else if (SmbEpisodeScanner.isVideo(name)) {
+                    directVideoCount++;
+                }
+            } catch (Exception ignored) {
+            }
+        }
+
+        if (directVideoCount > 0) {
+            candidates.add(new Candidate(directoryName(path), path, directVideoCount));
+        }
+        Collections.sort(subdirectories, (left, right) -> NaturalOrder.compare(left.getName(), right.getName()));
+        List<Pending> next = new ArrayList<>(subdirectories.size());
+        for (SmbFile subdirectory : subdirectories) next.add(new Pending(subdirectory, current.depth + 1));
+        return next;
     }
 
     private static boolean shouldSkip(String name) {

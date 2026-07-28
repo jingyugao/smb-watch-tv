@@ -16,9 +16,6 @@ import android.widget.ListView;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import org.json.JSONArray;
-import org.json.JSONObject;
-
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -28,9 +25,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 import jcifs.CIFSContext;
-import jcifs.context.SingletonContext;
-import jcifs.smb.NtlmPasswordAuthenticator;
-import jcifs.smb.SmbFile;
 
 public class PlaylistDetailActivity extends Activity {
     public static final String EXTRA_TITLE = "detail_title";
@@ -140,21 +134,13 @@ public class PlaylistDetailActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
-        JSONArray array;
-        try {
-            array = new JSONArray(SecurePreferences.get(this).getString("playlists", ""));
-        } catch (Exception ignored) {
-            return;
-        }
-        for (int i = 0; i < array.length(); i++) {
-            JSONObject item = array.optJSONObject(i);
-            if (item != null && TextUtils.equals(item.optString("dirPath"), ensureDirectory(removeUserInfo(directory)))) {
-                resumePath = normalizeFilePath(item.optString("lastEpisodePath"));
-                resumePosition = item.optLong("lastEpisodePositionMs", 0L);
-                updateContinueButton();
-                if (adapter != null) adapter.notifyDataSetChanged();
-                break;
-            }
+        PlaylistStore.Playlist item = PlaylistStore.findByDirectory(
+                this, ensureDirectory(removeUserInfo(directory)));
+        if (item != null) {
+            resumePath = normalizeFilePath(item.lastEpisodePath);
+            resumePosition = item.lastEpisodePositionMs;
+            updateContinueButton();
+            if (adapter != null) adapter.notifyDataSetChanged();
         }
     }
 
@@ -167,14 +153,7 @@ public class PlaylistDetailActivity extends Activity {
     }
 
     private CIFSContext buildContext() {
-        if (TextUtils.isEmpty(username) && TextUtils.isEmpty(password)) return SingletonContext.getInstance();
-        return SingletonContext.getInstance().withCredentials(new NtlmPasswordAuthenticator("", username, password));
-    }
-
-    private boolean isVideo(String name) {
-        String n = name.toLowerCase(Locale.ROOT);
-        return n.endsWith(".mp4") || n.endsWith(".mkv") || n.endsWith(".mov") || n.endsWith(".flv")
-                || n.endsWith(".avi") || n.endsWith(".ts") || n.endsWith(".m4v") || n.endsWith(".webm");
+        return SmbContexts.withCredentials(username, password);
     }
 
     private String value(String key) { String v = getIntent().getStringExtra(key); return v == null ? "" : v; }

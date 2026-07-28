@@ -45,8 +45,6 @@ import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 
 import jcifs.CIFSContext;
-import jcifs.context.SingletonContext;
-import jcifs.smb.NtlmPasswordAuthenticator;
 import jcifs.smb.SmbFile;
 
 final class RemoteControlManager {
@@ -276,7 +274,7 @@ final class RemoteControlManager {
         for (int i=0;i<a.length();i++){JSONObject o=a.optJSONObject(i);if(o!=null&&o.optString("url").equalsIgnoreCase(url))return o;} return null; }
     private JSONArray loadArray(String key) { try { return new JSONArray(SecurePreferences.get(context).getString(key, "")); } catch(Exception e){return new JSONArray();} }
     private void saveArray(String key, JSONArray value) { SecurePreferences.get(context).edit().putString(key, value.toString()).commit(); }
-    private CIFSContext smbContext(String user,String pass){return TextUtils.isEmpty(user)&&TextUtils.isEmpty(pass)?SingletonContext.getInstance():SingletonContext.getInstance().withCredentials(new NtlmPasswordAuthenticator("",user,pass));}
+    private CIFSContext smbContext(String user,String pass){return SmbContexts.withCredentials(user,pass);}
     private static boolean sameDir(String a,String b){return slash(a).equalsIgnoreCase(slash(b));}
     private static String slash(String s){return TextUtils.isEmpty(s)?"":s.endsWith("/")?s:s+"/";}
     private static JSONObject ok() throws Exception{return new JSONObject().put("ok",true);}

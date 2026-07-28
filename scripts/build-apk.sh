@@ -16,6 +16,7 @@ version="$(printf '1.3.%03d' "$next_number")"
 apk_name="smb-watch-tv-${version}-debug.apk"
 
 docker run --rm \
+    --network host \
     -v "$repo_dir:/workspace" \
     -v smb-watch-tv-gradle:/root/.gradle \
     smb-watch-tv-builder \
