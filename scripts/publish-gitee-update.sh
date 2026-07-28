@@ -20,15 +20,8 @@ repository="$mirror_root/repository"
 repository_url="https://gitee.com/$GITEE_OWNER/$GITEE_REPO.git"
 credential_helper='!f() { echo "username=$GITEE_OWNER"; echo "password=$GITEE_ACCESS_TOKEN"; }; f'
 
-if ! git -c credential.helper="$credential_helper" clone \
-    --depth 1 --branch update-mirror "$repository_url" "$repository"; then
-  git -c credential.helper="$credential_helper" clone \
-    --depth 1 "$repository_url" "$repository"
-  git -C "$repository" checkout --orphan update-mirror
-  git -C "$repository" rm -rf --ignore-unmatch .
-fi
-
-find "$repository" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf -- {} +
+git init --initial-branch=update-mirror "$repository"
+git -C "$repository" remote add origin "$repository_url"
 
 apk_name="$(basename "${apk[0]}")"
 checksum_name="$(basename "$checksum")"
@@ -66,4 +59,4 @@ git -C "$repository" config user.email github-actions@github.com
 git -C "$repository" add --all
 git -C "$repository" commit -m "Publish $RELEASE_TAG"
 git -C "$repository" -c credential.helper="$credential_helper" \
-  push origin HEAD:update-mirror
+  push --force origin HEAD:update-mirror
