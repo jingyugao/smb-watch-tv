@@ -23,12 +23,12 @@ def numericVersionCode = project.findProperty('releaseVersionCode')
 
 android {
     namespace 'com.smbwatch.tv'
-    compileSdk 34
+    compileSdk 35
 
     defaultConfig {
         applicationId 'com.smbwatch.tv'
         minSdk 21
-        targetSdk 34
+        targetSdk 35
         versionCode numericVersionCode
         versionName displayVersion
     }
@@ -56,7 +56,9 @@ android {
             }
         }
         release {
-            minifyEnabled false
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
             if (signingPropertiesFile.exists()) {
                 signingConfig signingConfigs.stable
             }
@@ -72,10 +74,14 @@ android.applicationVariants.all { variant ->
 
 dependencies {
     implementation 'eu.agno3.jcifs:jcifs-ng:2.1.10'
-    implementation 'androidx.media3:media3-exoplayer:1.3.1'
-    implementation 'androidx.media3:media3-ui:1.3.1'
+    implementation 'androidx.media3:media3-exoplayer:1.7.1'
+    implementation 'androidx.media3:media3-ui:1.7.1'
     implementation 'androidx.security:security-crypto:1.1.0'
     implementation 'com.google.zxing:core:3.5.4'
+
+    testImplementation 'junit:junit:4.13.2'
+    // JVM 单元测试使用真实的 org.json 实现（android.jar 中只有桩）
+    testImplementation 'org.json:json:20240303'
 }
 
 configurations.configureEach {

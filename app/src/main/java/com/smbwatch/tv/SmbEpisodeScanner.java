@@ -93,20 +93,20 @@ final class SmbEpisodeScanner {
     }
 
     static boolean isVideo(String name) {
-        String lower = TextUtils.isEmpty(name) ? "" : name.toLowerCase(Locale.ROOT);
+        String lower = SmbUrls.isEmpty(name) ? "" : name.toLowerCase(Locale.ROOT);
         return lower.endsWith(".mp4") || lower.endsWith(".mkv") || lower.endsWith(".mov")
                 || lower.endsWith(".flv") || lower.endsWith(".avi") || lower.endsWith(".ts")
                 || lower.endsWith(".m4v") || lower.endsWith(".webm");
     }
 
-    private static boolean isSubtitle(String name) {
-        String lower = TextUtils.isEmpty(name) ? "" : name.toLowerCase(Locale.ROOT);
+    static boolean isSubtitle(String name) {
+        String lower = SmbUrls.isEmpty(name) ? "" : name.toLowerCase(Locale.ROOT);
         return lower.endsWith(".srt") || lower.endsWith(".ass") || lower.endsWith(".ssa")
                 || lower.endsWith(".vtt");
     }
 
     private static String baseName(String name) {
-        if (TextUtils.isEmpty(name)) return "";
+        if (SmbUrls.isEmpty(name)) return "";
         int dot = name.lastIndexOf('.');
         return dot <= 0 ? name : name.substring(0, dot);
     }

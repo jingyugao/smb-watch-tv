@@ -27,8 +27,6 @@ import java.util.concurrent.Executors;
 import java.util.UUID;
 
 import jcifs.CIFSContext;
-import jcifs.context.SingletonContext;
-import jcifs.smb.NtlmPasswordAuthenticator;
 import jcifs.smb.SmbFile;
 
 public class SmbBrowserActivity extends Activity {
@@ -448,10 +446,7 @@ public class SmbBrowserActivity extends Activity {
     }
 
     private CIFSContext buildContext() {
-        if (TextUtils.isEmpty(username) && TextUtils.isEmpty(password)) {
-            return SingletonContext.getInstance();
-        }
-        return SingletonContext.getInstance().withCredentials(new NtlmPasswordAuthenticator("", username, password));
+        return SmbContexts.withCredentials(username, password);
     }
 
     private String formatMs(long ms) {

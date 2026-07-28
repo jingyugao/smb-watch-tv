@@ -5,7 +5,6 @@ import android.app.AlertDialog;
 import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.Bitmap;
-import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -22,10 +21,6 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import org.json.JSONArray;
-import org.json.JSONException;
-import org.json.JSONObject;
-
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -38,16 +33,10 @@ import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-import jcifs.CIFSContext;
-import jcifs.context.SingletonContext;
-import jcifs.smb.NtlmPasswordAuthenticator;
 import jcifs.smb.SmbFile;
 
 public class MainActivity extends Activity {
 
-    private static final String PREF_NAME = "smb_pref";
-    private static final String KEY_CONNECTIONS = "connections";
-    private static final String KEY_PLAYLISTS = "playlists";
     private static final int REQ_BROWSE_SMB = 2001;
     private static final int TAB_RECENT = 0;
     private static final int TAB_PLAYLIST = 1;
@@ -74,13 +63,13 @@ public class MainActivity extends Activity {
     private View sectionRecent;
     private View sectionPlaylists;
     private View sectionSmb;
-    private ArrayAdapter<SmbConnection> connectionAdapter;
+    private ArrayAdapter<PlaylistStore.Connection> connectionAdapter;
     private PlaylistAdapter playlistAdapter;
     private PlaylistAdapter recentPlaylistAdapter;
 
-    private final List<SmbConnection> connections = new ArrayList<>();
-    private final List<PlaylistItem> playlists = new ArrayList<>();
-    private final List<PlaylistItem> recentPlaylists = new ArrayList<>();
+    private final List<PlaylistStore.Connection> connections = new ArrayList<>();
+    private final List<PlaylistStore.Playlist> playlists = new ArrayList<>();
+    private final List<PlaylistStore.Playlist> recentPlaylists = new ArrayList<>();
     private final ExecutorService ioExecutor = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private boolean isSavingConnection;
@@ -188,12 +177,12 @@ public class MainActivity extends Activity {
             if (position < 0 || position >= connections.size()) {
                 return true;
             }
-            SmbConnection conn = connections.get(position);
+            PlaylistStore.Connection conn = connections.get(position);
             new AlertDialog.Builder(this)
                     .setMessage("删除连接 " + conn.name + "?")
                     .setPositiveButton("删除", (d, which) -> {
                         connections.remove(position);
-                        saveConnections();
+                        PlaylistStore.saveConnections(this, connections);
                         refreshConnections();
                         tvStatus.setText("已删除：" + conn.name);
                     })
@@ -223,7 +212,7 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void openBrowser(SmbConnection conn) {
+    private void openBrowser(PlaylistStore.Connection conn) {
         Intent intent = new Intent(this, SmbBrowserActivity.class);
         intent.putExtra(SmbBrowserActivity.EXTRA_CONN_NAME, conn.name);
         intent.putExtra(SmbBrowserActivity.EXTRA_SMB_URL, conn.url);
@@ -232,7 +221,7 @@ public class MainActivity extends Activity {
         startActivityForResult(intent, REQ_BROWSE_SMB);
     }
 
-    private void openPlaylist(PlaylistItem item) {
+    private void openPlaylist(PlaylistStore.Playlist item) {
         Intent intent = new Intent(this, PlayerActivity.class);
         intent.putExtra(PlayerActivity.EXTRA_CONN_NAME, item.connectionName);
         intent.putExtra(PlayerActivity.EXTRA_SOURCE_URL, item.sourceUrl);
@@ -244,7 +233,7 @@ public class MainActivity extends Activity {
         startActivity(intent);
     }
 
-    private void openPlaylistDetail(PlaylistItem item) {
+    private void openPlaylistDetail(PlaylistStore.Playlist item) {
         Intent intent = new Intent(this, PlaylistDetailActivity.class);
         intent.putExtra(PlaylistDetailActivity.EXTRA_TITLE, item.title);
         intent.putExtra(PlaylistDetailActivity.EXTRA_CONN_NAME, item.connectionName);
@@ -267,7 +256,6 @@ public class MainActivity extends Activity {
         String fileName = data.getStringExtra(SmbBrowserActivity.RESULT_FILE_NAME);
         String filePath = data.getStringExtra(SmbBrowserActivity.RESULT_FILE_PATH);
         String dirPath = data.getStringExtra(SmbBrowserActivity.RESULT_DIR_PATH);
-        String dirName = data.getStringExtra(SmbBrowserActivity.RESULT_DIR_NAME);
         String connectionName = data.getStringExtra(SmbBrowserActivity.RESULT_CONN_NAME);
         String sourceUrl = data.getStringExtra(SmbBrowserActivity.RESULT_CONN_URL);
         String username = data.getStringExtra(SmbBrowserActivity.RESULT_USERNAME);
@@ -277,7 +265,7 @@ public class MainActivity extends Activity {
         long lastEpisodePos = data.getLongExtra(SmbBrowserActivity.RESULT_LAST_POSITION_MS, 0L);
 
         if (TextUtils.isEmpty(dirPath) && !TextUtils.isEmpty(filePath)) {
-            dirPath = parentDirectoryOfFile(filePath);
+            dirPath = SmbUrls.parentDirectory(filePath);
         }
 
         if (TextUtils.isEmpty(dirPath)) {
@@ -293,7 +281,7 @@ public class MainActivity extends Activity {
             sourceUrl = dirPath;
         }
         if (TextUtils.isEmpty(connectionName)) {
-            connectionName = extractConnectionName(sourceUrl);
+            connectionName = connectionNameOf(sourceUrl);
         }
         if (TextUtils.isEmpty(username)) {
             username = "";
@@ -307,9 +295,6 @@ public class MainActivity extends Activity {
         if (TextUtils.isEmpty(lastEpisodeName) && !TextUtils.isEmpty(fileName)) {
             lastEpisodeName = fileName;
         }
-        if (TextUtils.isEmpty(dirName)) {
-            dirName = extractDirectoryName(dirPath);
-        }
 
         scanAndAddPlaylistFolders(connectionName, sourceUrl, username, password, dirPath,
                 lastEpisodeName, lastEpisodePath, lastEpisodePos);
@@ -322,16 +307,16 @@ public class MainActivity extends Activity {
         final String safeSourceUrl = sourceUrl;
         final String safeUsername = username;
         final String safePassword = password;
-        final String safeRootPath = ensureTrailingSlash(rootPath);
+        final String safeRootPath = SmbUrls.ensureTrailingSlash(rootPath);
         tvStatus.setText("正在扫描文件夹并生成播放列表...");
         ioExecutor.execute(() -> {
             try {
                 List<SmbPlaylistScanner.Candidate> candidates = SmbPlaylistScanner.scan(
-                        safeRootPath, buildSmbContext(safeUsername, safePassword));
+                        safeRootPath, SmbContexts.withCredentials(safeUsername, safePassword));
                 mainHandler.post(() -> {
                     for (SmbPlaylistScanner.Candidate candidate : candidates) {
                         boolean isSelectedRoot = TextUtils.equals(
-                                ensureTrailingSlash(candidate.directoryPath), safeRootPath);
+                                SmbUrls.ensureTrailingSlash(candidate.directoryPath), safeRootPath);
                         upsertPlaylistItem(
                                 candidate.title,
                                 safeConnectionName,
@@ -363,10 +348,18 @@ public class MainActivity extends Activity {
 
     private void reloadDataFromStorage() {
         connections.clear();
+        connections.addAll(PlaylistStore.loadConnections(this));
+
         playlists.clear();
+        List<PlaylistStore.Playlist> loaded = PlaylistStore.loadPlaylists(this);
+        List<PlaylistStore.Playlist> unique = PlaylistStore.deduplicate(loaded);
+        playlists.addAll(unique);
+        if (unique.size() != loaded.size()) {
+            PlaylistStore.savePlaylists(this, playlists);
+        }
+        sortPlaylists();
+
         recentPlaylists.clear();
-        loadConnections();
-        loadPlaylists();
     }
 
     private void showTab(int tab) {
@@ -450,7 +443,7 @@ public class MainActivity extends Activity {
 
     private void upsertPlaylistItem(String title, String connectionName, String sourceUrl, String username, String password,
                                     String dirPath, String lastEpisodeName, String lastEpisodePath, long lastEpisodePosition) {
-        String normalizedDir = ensureTrailingSlash(dirPath);
+        String normalizedDir = SmbUrls.ensureTrailingSlash(dirPath);
         if (TextUtils.isEmpty(normalizedDir)) {
             return;
         }
@@ -458,11 +451,11 @@ public class MainActivity extends Activity {
             sourceUrl = normalizedDir;
         }
 
-        PlaylistItem previous = null;
+        PlaylistStore.Playlist previous = null;
         for (int i = playlists.size() - 1; i >= 0; i--) {
-            PlaylistItem item = playlists.get(i);
-            if (sameDirectory(item.dirPath, normalizedDir)) {
-                previous = preferredPlaylist(previous, item);
+            PlaylistStore.Playlist item = playlists.get(i);
+            if (SmbUrls.sameDirectory(item.dirPath, normalizedDir)) {
+                previous = PlaylistStore.preferred(previous, item);
                 playlists.remove(i);
             }
         }
@@ -474,10 +467,10 @@ public class MainActivity extends Activity {
         }
 
         if (TextUtils.isEmpty(lastEpisodeName) && !TextUtils.isEmpty(lastEpisodePath)) {
-            lastEpisodeName = extractFileName(lastEpisodePath);
+            lastEpisodeName = SmbUrls.fileName(lastEpisodePath);
         }
 
-        playlists.add(new PlaylistItem(
+        playlists.add(new PlaylistStore.Playlist(
                 title,
                 connectionName,
                 sourceUrl,
@@ -490,7 +483,7 @@ public class MainActivity extends Activity {
                 previous == null ? System.currentTimeMillis() : previous.createdAt
         ));
         sortPlaylists();
-        savePlaylists();
+        PlaylistStore.savePlaylists(this, playlists);
         refreshPlaylists();
         refreshRecentPlaylists();
     }
@@ -507,7 +500,7 @@ public class MainActivity extends Activity {
 
         final String finalUrl;
         try {
-            finalUrl = normalizeSmbUrl(rawUrl);
+            finalUrl = SmbUrls.normalize(rawUrl);
         } catch (IllegalArgumentException e) {
             tvStatus.setText("无法保存：" + e.getMessage());
             return;
@@ -529,8 +522,8 @@ public class MainActivity extends Activity {
                         return;
                     }
 
-                connections.add(0, new SmbConnection(finalName, finalUrl, finalUser, finalPass));
-                saveConnections();
+                connections.add(0, new PlaylistStore.Connection(finalName, finalUrl, finalUser, finalPass));
+                PlaylistStore.saveConnections(this, connections);
                 refreshConnections();
                 tvStatus.setText("已保存：" + finalUrl);
 
@@ -573,7 +566,7 @@ public class MainActivity extends Activity {
 
         String finalUrl;
         try {
-            finalUrl = normalizeSmbUrl(rawUrl);
+            finalUrl = SmbUrls.normalize(rawUrl);
         } catch (IllegalArgumentException e) {
             tvStatus.setText("测试失败：" + e.getMessage());
             return;
@@ -673,19 +666,15 @@ public class MainActivity extends Activity {
     }
 
     private String deriveConnectionNameFromUrl(String smbUrl) {
-        if (TextUtils.isEmpty(smbUrl)) {
+        String host = SmbUrls.hostOf(smbUrl);
+        if (TextUtils.isEmpty(host)) {
             return "SMB";
         }
-        Uri uri = Uri.parse(smbUrl);
-        if (uri == null || TextUtils.isEmpty(uri.getHost())) {
-            return "SMB";
-        }
-        String host = uri.getHost();
-        String path = uri.getPath();
+        String path = SmbUrls.pathOf(smbUrl);
         if (TextUtils.isEmpty(path) || "/".equals(path)) {
             return host;
         }
-        String trimmed = removeTrailingSlash(path);
+        String trimmed = SmbUrls.removeTrailingSlash(path);
         int slash = trimmed.lastIndexOf('/');
         if (slash < 0 || slash + 1 >= trimmed.length()) {
             return host + trimmed;
@@ -700,7 +689,8 @@ public class MainActivity extends Activity {
             if (!canReachSmbPort(host, 445, 3000)) {
                 return "SMB 端口不可达（445）";
             }
-            SmbFile root = new SmbFile(ensureTrailingSlash(smbUrl), buildSmbContext(username, password));
+            SmbFile root = new SmbFile(SmbUrls.ensureTrailingSlash(smbUrl),
+                    SmbContexts.withCredentials(username, password));
             if (!root.exists() || !root.isDirectory()) {
                 return "SMB 地址无效或账号无权访问";
             }
@@ -721,62 +711,8 @@ public class MainActivity extends Activity {
         }
     }
 
-    private String validateLocalHost(String smbUrl) {
-        try {
-            requireLocalNetwork(smbUrl);
-            return "";
-        } catch (IllegalArgumentException e) {
-            return e.getMessage();
-        }
-    }
-
-    private String normalizeSmbUrl(String rawUrl) {
-        String normalized = rawUrl;
-        if (!normalized.startsWith("smb://")) {
-            normalized = "smb://" + normalized;
-        }
-
-        Uri uri = Uri.parse(normalized);
-        if (uri == null) {
-            throw new IllegalArgumentException("非法 URL");
-        }
-        String host = uri.getHost();
-        if (TextUtils.isEmpty(host)) {
-            throw new IllegalArgumentException("非法 SMB 地址");
-        }
-
-        String path = uri.getEncodedPath();
-        String query = uri.getEncodedQuery();
-        String fragment = uri.getEncodedFragment();
-        StringBuilder result = new StringBuilder();
-        result.append("smb://");
-        result.append(host);
-        if (uri.getPort() > 0) {
-            result.append(":").append(uri.getPort());
-        }
-        if (!TextUtils.isEmpty(path)) {
-            result.append(path);
-        }
-        if (!TextUtils.isEmpty(query)) {
-            result.append("?").append(query);
-        }
-        if (!TextUtils.isEmpty(fragment)) {
-            result.append("#").append(fragment);
-        }
-        return result.toString();
-    }
-
-    private CIFSContext buildSmbContext(String username, String password) {
-        if (TextUtils.isEmpty(username) && TextUtils.isEmpty(password)) {
-            return SingletonContext.getInstance();
-        }
-        return SingletonContext.getInstance().withCredentials(
-                new NtlmPasswordAuthenticator("", username, password == null ? "" : password));
-    }
-
     private void requireLocalNetwork(String smbUrl) {
-        Uri uri = Uri.parse(smbUrl);
-        String host = uri == null ? null : uri.getHost();
+        String host = SmbUrls.hostOf(smbUrl);
         if (TextUtils.isEmpty(host)) {
             throw new IllegalArgumentException("非法 SMB 地址");
         }
@@ -844,11 +780,11 @@ public class MainActivity extends Activity {
     }
 
     private String extractHost(String smbUrl) {
-        Uri uri = Uri.parse(smbUrl);
-        if (uri == null || TextUtils.isEmpty(uri.getHost())) {
+        String host = SmbUrls.hostOf(smbUrl);
+        if (TextUtils.isEmpty(host)) {
             throw new IllegalArgumentException("无法解析 Host");
         }
-        return uri.getHost();
+        return host;
     }
 
     private boolean canReachSmbPort(String host, int port, int timeoutMs) {
@@ -858,166 +794,6 @@ public class MainActivity extends Activity {
         } catch (IOException e) {
             return false;
         }
-    }
-
-    private void loadConnections() {
-        String raw = SecurePreferences.get(this).getString(KEY_CONNECTIONS, "");
-        if (TextUtils.isEmpty(raw)) {
-            return;
-        }
-        try {
-            JSONArray arr = new JSONArray(raw);
-            for (int i = 0; i < arr.length(); i++) {
-                JSONObject obj = arr.getJSONObject(i);
-                String name = obj.optString("name", "");
-                String url = obj.optString("url", "");
-                String username = obj.optString("username", DEFAULT_USERNAME);
-                String password = obj.optString("password", DEFAULT_PASSWORD);
-                if (!TextUtils.isEmpty(url)) {
-                    try {
-                        url = normalizeSmbUrl(url);
-                        connections.add(new SmbConnection(name, url, username, password));
-                    } catch (IllegalArgumentException ignored) {
-                        // Skip malformed legacy connections.
-                    }
-                }
-            }
-        } catch (JSONException e) {
-            // ignore corrupt data
-        }
-    }
-
-    private void saveConnections() {
-        JSONArray arr = new JSONArray();
-        for (SmbConnection conn : connections) {
-            try {
-                JSONObject obj = new JSONObject();
-                obj.put("name", conn.name);
-                obj.put("url", conn.url);
-                obj.put("username", conn.username);
-                obj.put("password", conn.password);
-                arr.put(obj);
-            } catch (JSONException ignored) {
-            }
-        }
-        SecurePreferences.get(this).edit()
-                .putString(KEY_CONNECTIONS, arr.toString())
-                .apply();
-    }
-
-    private void loadPlaylists() {
-        String raw = SecurePreferences.get(this).getString(KEY_PLAYLISTS, "");
-        if (TextUtils.isEmpty(raw)) {
-            return;
-        }
-        try {
-            JSONArray arr = new JSONArray(raw);
-            for (int i = 0; i < arr.length(); i++) {
-                JSONObject obj = arr.getJSONObject(i);
-                String title = obj.optString("title", "");
-                String connectionName = obj.optString("connectionName", "");
-                String sourceUrl = obj.optString("sourceUrl", "");
-                String dirPath = obj.optString("dirPath", "");
-                String username = obj.optString("username", "");
-                String password = obj.optString("password", "");
-                String lastEpisodeName = obj.optString("lastEpisodeName", "");
-                String lastEpisodePath = obj.optString("lastEpisodePath", "");
-                long lastEpisodePositionMs = obj.optLong("lastEpisodePositionMs", 0L);
-                long createdAt = obj.optLong("createdAt", System.currentTimeMillis());
-
-                if (TextUtils.isEmpty(dirPath)) {
-                    String legacyPath = obj.optString("path", "");
-                    if (!TextUtils.isEmpty(legacyPath)) {
-                        dirPath = parentDirectoryOfFile(legacyPath);
-                        if (TextUtils.isEmpty(lastEpisodeName)) {
-                            lastEpisodeName = extractFileName(legacyPath);
-                        }
-                        if (TextUtils.isEmpty(lastEpisodePath)) {
-                            lastEpisodePath = legacyPath;
-                        }
-                        if (TextUtils.isEmpty(title)) {
-                            title = extractDirectoryName(dirPath);
-                        }
-                        if (TextUtils.isEmpty(connectionName)) {
-                            connectionName = extractConnectionName(sourceUrl);
-                        }
-                    }
-                }
-                if (TextUtils.isEmpty(dirPath)) {
-                    continue;
-                }
-                if (TextUtils.isEmpty(sourceUrl)) {
-                    sourceUrl = dirPath;
-                }
-                try {
-                    sourceUrl = normalizeSmbUrl(sourceUrl);
-                    dirPath = normalizeSmbUrl(dirPath);
-                } catch (IllegalArgumentException ignored) {
-                    continue;
-                }
-                if (TextUtils.isEmpty(connectionName)) {
-                    connectionName = extractConnectionName(sourceUrl);
-                }
-                playlists.add(new PlaylistItem(
-                        TextUtils.isEmpty(title) ? extractDirectoryName(dirPath) : title,
-                        connectionName,
-                        sourceUrl,
-                        username,
-                        password,
-                        ensureTrailingSlash(dirPath),
-                        lastEpisodeName,
-                        lastEpisodePath,
-                        lastEpisodePositionMs,
-                        createdAt
-                ));
-            }
-            if (deduplicatePlaylists()) {
-                savePlaylists();
-            }
-            sortPlaylists();
-        } catch (JSONException e) {
-            // ignore corrupt data
-        }
-    }
-
-    private boolean deduplicatePlaylists() {
-        List<PlaylistItem> unique = new ArrayList<>();
-        boolean changed = false;
-        for (PlaylistItem candidate : playlists) {
-            int duplicateIndex = -1;
-            for (int i = 0; i < unique.size(); i++) {
-                if (sameDirectory(unique.get(i).dirPath, candidate.dirPath)) {
-                    duplicateIndex = i;
-                    break;
-                }
-            }
-            if (duplicateIndex < 0) {
-                unique.add(candidate);
-            } else {
-                unique.set(duplicateIndex, preferredPlaylist(unique.get(duplicateIndex), candidate));
-                changed = true;
-            }
-        }
-        if (changed) {
-            playlists.clear();
-            playlists.addAll(unique);
-        }
-        return changed;
-    }
-
-    private PlaylistItem preferredPlaylist(PlaylistItem left, PlaylistItem right) {
-        if (left == null) return right;
-        if (right == null) return left;
-        boolean leftHasProgress = !TextUtils.isEmpty(left.lastEpisodePath) || left.lastEpisodePositionMs > 0L;
-        boolean rightHasProgress = !TextUtils.isEmpty(right.lastEpisodePath) || right.lastEpisodePositionMs > 0L;
-        if (leftHasProgress != rightHasProgress) return rightHasProgress ? right : left;
-        return right.createdAt >= left.createdAt ? right : left;
-    }
-
-    private boolean sameDirectory(String left, String right) {
-        String normalizedLeft = ensureTrailingSlash(left == null ? "" : left);
-        String normalizedRight = ensureTrailingSlash(right == null ? "" : right);
-        return !TextUtils.isEmpty(normalizedLeft) && normalizedLeft.equalsIgnoreCase(normalizedRight);
     }
 
     private void cleanInvalidPlaylists() {
@@ -1033,16 +809,16 @@ public class MainActivity extends Activity {
         isCleaningPlaylists = true;
         btnCleanInvalidPlaylists.setEnabled(false);
         btnCleanInvalidPlaylists.setText("检查中...");
-        List<PlaylistItem> snapshot = new ArrayList<>(playlists);
+        List<PlaylistStore.Playlist> snapshot = new ArrayList<>(playlists);
         ioExecutor.execute(() -> {
             List<String> invalidDirectories = new ArrayList<>();
             int unavailableCount = 0;
-            for (PlaylistItem item : snapshot) {
+            for (PlaylistStore.Playlist item : snapshot) {
                 if (Thread.currentThread().isInterrupted()) return;
                 try {
                     SmbFile directory = new SmbFile(
-                            ensureTrailingSlash(item.dirPath),
-                            buildSmbContext(item.username, item.password));
+                            SmbUrls.ensureTrailingSlash(item.dirPath),
+                            SmbContexts.withCredentials(item.username, item.password));
                     if (!directory.exists() || !directory.isDirectory()) {
                         invalidDirectories.add(item.dirPath);
                     }
@@ -1056,13 +832,18 @@ public class MainActivity extends Activity {
                 int before = playlists.size();
                 playlists.removeIf(item -> {
                     for (String invalidDirectory : invalidDirectories) {
-                        if (sameDirectory(item.dirPath, invalidDirectory)) return true;
+                        if (SmbUrls.sameDirectory(item.dirPath, invalidDirectory)) return true;
                     }
                     return false;
                 });
-                boolean deduplicated = deduplicatePlaylists();
+                List<PlaylistStore.Playlist> unique = PlaylistStore.deduplicate(playlists);
+                boolean deduplicated = unique.size() != playlists.size();
+                if (deduplicated) {
+                    playlists.clear();
+                    playlists.addAll(unique);
+                }
                 int removed = before - playlists.size();
-                if (removed > 0 || deduplicated) savePlaylists();
+                if (removed > 0 || deduplicated) PlaylistStore.savePlaylists(this, playlists);
                 refreshPlaylists();
                 refreshRecentPlaylists();
                 isCleaningPlaylists = false;
@@ -1102,30 +883,6 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void savePlaylists() {
-        JSONArray arr = new JSONArray();
-        for (PlaylistItem item : playlists) {
-            try {
-                JSONObject obj = new JSONObject();
-                obj.put("title", item.title);
-                obj.put("connectionName", item.connectionName);
-                obj.put("sourceUrl", item.sourceUrl);
-                obj.put("dirPath", item.dirPath);
-                obj.put("username", item.username);
-                obj.put("password", item.password);
-                obj.put("lastEpisodeName", item.lastEpisodeName);
-                obj.put("lastEpisodePath", item.lastEpisodePath);
-                obj.put("lastEpisodePositionMs", item.lastEpisodePositionMs);
-                obj.put("createdAt", item.createdAt);
-                arr.put(obj);
-            } catch (JSONException ignored) {
-            }
-        }
-        SecurePreferences.get(this).edit()
-                .putString(KEY_PLAYLISTS, arr.toString())
-                .apply();
-    }
-
     private void sortPlaylists() {
         playlists.sort((a, b) -> {
             int cmp = String.CASE_INSENSITIVE_ORDER.compare(a.title, b.title);
@@ -1138,7 +895,7 @@ public class MainActivity extends Activity {
 
     private void refreshRecentPlaylists() {
         recentPlaylists.clear();
-        for (PlaylistItem item : playlists) {
+        for (PlaylistStore.Playlist item : playlists) {
             boolean hasHistory = !TextUtils.isEmpty(item.lastEpisodePath) || !TextUtils.isEmpty(item.lastEpisodeName);
             if (hasHistory) {
                 recentPlaylists.add(item);
@@ -1169,79 +926,9 @@ public class MainActivity extends Activity {
         Toast.makeText(this, msg, Toast.LENGTH_SHORT).show();
     }
 
-    private String extractConnectionName(String smbUrl) {
-        if (TextUtils.isEmpty(smbUrl)) {
-            return "SMB";
-        }
-        Uri uri = Uri.parse(smbUrl);
-        if (uri == null || TextUtils.isEmpty(uri.getHost())) {
-            return "SMB";
-        }
-        return uri.getHost();
-    }
-
-    private String parentDirectoryOfFile(String filePath) {
-        if (TextUtils.isEmpty(filePath)) {
-            return "";
-        }
-        Uri uri = Uri.parse(filePath);
-        if (uri == null || TextUtils.isEmpty(uri.getHost())) {
-            return "";
-        }
-        String fileUrlPath = uri.getPath();
-        if (TextUtils.isEmpty(fileUrlPath)) {
-            return "";
-        }
-        String trimmed = removeTrailingSlash(ensureTrailingSlash(fileUrlPath));
-        int lastSlash = trimmed.lastIndexOf('/');
-        if (lastSlash <= 0) {
-            StringBuilder base = new StringBuilder("smb://");
-            base.append(uri.getHost());
-            if (uri.getPort() > 0) {
-                base.append(":").append(uri.getPort());
-            }
-            base.append("/");
-            return base.toString();
-        }
-        String parentPath = trimmed.substring(0, lastSlash + 1);
-        StringBuilder base = new StringBuilder("smb://");
-        base.append(uri.getHost());
-        if (uri.getPort() > 0) {
-            base.append(":").append(uri.getPort());
-        }
-        base.append(parentPath);
-        return base.toString();
-    }
-
-    private String extractDirectoryName(String smbPath) {
-        if (TextUtils.isEmpty(smbPath)) {
-            return "未命名目录";
-        }
-        Uri uri = Uri.parse(smbPath);
-        if (uri == null) {
-            return smbPath;
-        }
-        String path = uri.getPath();
-        if (TextUtils.isEmpty(path)) {
-            return smbPath;
-        }
-        String trimmed = removeTrailingSlash(path);
-        int slash = trimmed.lastIndexOf('/');
-        if (slash < 0 || slash + 1 >= trimmed.length()) {
-            return trimmed;
-        }
-        return trimmed.substring(slash + 1);
-    }
-
-    private String extractFileName(String filePath) {
-        if (TextUtils.isEmpty(filePath)) {
-            return "";
-        }
-        int slash = filePath.lastIndexOf('/');
-        if (slash < 0 || slash + 1 >= filePath.length()) {
-            return filePath;
-        }
-        return filePath.substring(slash + 1);
+    private String connectionNameOf(String smbUrl) {
+        String host = SmbUrls.hostOf(smbUrl);
+        return TextUtils.isEmpty(host) ? "SMB" : host;
     }
 
     private String formatPosition(long ms) {
@@ -1249,26 +936,6 @@ public class MainActivity extends Activity {
         long minutes = totalSeconds / 60L;
         long seconds = totalSeconds % 60L;
         return minutes + ":" + String.format("%02d", seconds);
-    }
-
-    private String ensureTrailingSlash(String raw) {
-        if (TextUtils.isEmpty(raw)) {
-            return "";
-        }
-        if (raw.endsWith("/")) {
-            return raw;
-        }
-        return raw + "/";
-    }
-
-    private String removeTrailingSlash(String raw) {
-        if (TextUtils.isEmpty(raw)) {
-            return "";
-        }
-        if (raw.endsWith("/")) {
-            return raw.substring(0, raw.length() - 1);
-        }
-        return raw;
     }
 
     @Override
@@ -1281,7 +948,7 @@ public class MainActivity extends Activity {
         ioExecutor.shutdownNow();
     }
 
-    private class ConnectionAdapter extends ArrayAdapter<SmbConnection> {
+    private class ConnectionAdapter extends ArrayAdapter<PlaylistStore.Connection> {
         ConnectionAdapter() {
             super(MainActivity.this, R.layout.item_connection, connections);
         }
@@ -1293,7 +960,7 @@ public class MainActivity extends Activity {
                 view = LayoutInflater.from(getContext()).inflate(R.layout.item_connection, parent, false);
             }
 
-            SmbConnection conn = getItem(position);
+            PlaylistStore.Connection conn = getItem(position);
             if (conn == null) {
                 return view;
             }
@@ -1309,12 +976,12 @@ public class MainActivity extends Activity {
         }
     }
 
-    private class PlaylistAdapter extends ArrayAdapter<PlaylistItem> {
+    private class PlaylistAdapter extends ArrayAdapter<PlaylistStore.Playlist> {
         PlaylistAdapter() {
             super(MainActivity.this, R.layout.item_playlist, playlists);
         }
 
-        PlaylistAdapter(List<PlaylistItem> source) {
+        PlaylistAdapter(List<PlaylistStore.Playlist> source) {
             super(MainActivity.this, R.layout.item_playlist, source);
         }
 
@@ -1325,7 +992,7 @@ public class MainActivity extends Activity {
                 view = LayoutInflater.from(getContext()).inflate(R.layout.item_playlist, parent, false);
             }
 
-            PlaylistItem item = getItem(position);
+            PlaylistStore.Playlist item = getItem(position);
             if (item == null) {
                 return view;
             }
@@ -1347,48 +1014,6 @@ public class MainActivity extends Activity {
             }
 
             return view;
-        }
-    }
-
-    private static class SmbConnection {
-        final String name;
-        final String url;
-        final String username;
-        final String password;
-
-        SmbConnection(String name, String url, String username, String password) {
-            this.name = name;
-            this.url = url;
-            this.username = username;
-            this.password = password;
-        }
-    }
-
-    private static class PlaylistItem {
-        final String title;
-        final String connectionName;
-        final String sourceUrl;
-        final String username;
-        final String password;
-        final String dirPath;
-        final String lastEpisodeName;
-        final String lastEpisodePath;
-        final long lastEpisodePositionMs;
-        final long createdAt;
-
-        PlaylistItem(String title, String connectionName, String sourceUrl, String username, String password,
-                     String dirPath, String lastEpisodeName, String lastEpisodePath,
-                     long lastEpisodePositionMs, long createdAt) {
-            this.title = title;
-            this.connectionName = connectionName;
-            this.sourceUrl = sourceUrl;
-            this.username = username;
-            this.password = password;
-            this.dirPath = dirPath;
-            this.lastEpisodeName = lastEpisodeName;
-            this.lastEpisodePath = lastEpisodePath;
-            this.lastEpisodePositionMs = lastEpisodePositionMs;
-            this.createdAt = createdAt;
         }
     }
 }

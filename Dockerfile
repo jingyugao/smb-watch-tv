@@ -29,7 +29,7 @@ RUN wget -q https://services.gradle.org/distributions/gradle-8.9-bin.zip -O grad
     && rm gradle.zip
 
 RUN yes | sdkmanager --licenses >/dev/null \
-    && sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+    && sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
 WORKDIR /workspace
 VOLUME ["/workspace", "/root/.gradle"]

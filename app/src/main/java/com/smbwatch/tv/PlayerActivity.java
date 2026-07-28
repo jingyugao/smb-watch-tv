@@ -39,7 +39,6 @@ import androidx.media3.ui.CaptionStyleCompat;
 import androidx.media3.ui.PlayerView;
 import androidx.media3.ui.SubtitleView;
 
-import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -50,8 +49,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 import jcifs.CIFSContext;
-import jcifs.context.SingletonContext;
-import jcifs.smb.NtlmPasswordAuthenticator;
 
 public class PlayerActivity extends Activity {
     public static final String EXTRA_CONN_NAME = "player_conn_name";
@@ -62,7 +59,6 @@ public class PlayerActivity extends Activity {
     public static final String EXTRA_RESUME_FILE_PATH = "player_resume_file_path";
     public static final String EXTRA_RESUME_POSITION_MS = "player_resume_position_ms";
 
-    private static final String KEY_PLAYLISTS = "playlists";
     private static final String KEY_SPEED = "player_speed";
     private static final String KEY_SEEK_STEP = "player_seek_step";
     private static final String KEY_AUDIO_INDEX = "player_audio_index";
@@ -954,49 +950,10 @@ public class PlayerActivity extends Activity {
 
         String finalSafeSource = safeSource;
         String finalSafeDir = safeDir;
-        progressExecutor.execute(() -> persistProgress(
-                title, finalSafeSource, finalSafeDir, item, positionMs));
-    }
-
-    private void persistProgress(String title, String safeSource, String safeDir,
-                                 EpisodeItem item, long positionMs) {
-        SharedPreferences sp = SecurePreferences.get(this);
-        JSONArray arr;
-        try { arr = new JSONArray(sp.getString(KEY_PLAYLISTS, "")); }
-        catch (Exception ignored) { arr = new JSONArray(); }
-        JSONArray merged = new JSONArray();
-        boolean found = false;
-        for (int i = 0; i < arr.length(); i++) {
-            JSONObject obj = arr.optJSONObject(i);
-            if (obj == null) continue;
-            if (TextUtils.equals(obj.optString("dirPath"), safeDir)
-                    && TextUtils.equals(obj.optString("sourceUrl"), safeSource)) {
-                merged.put(buildPlaylistJson(title, safeSource, safeDir, item, positionMs));
-                found = true;
-            } else {
-                merged.put(obj);
-            }
-        }
-        if (!found) merged.put(buildPlaylistJson(title, safeSource, safeDir, item, positionMs));
-        sp.edit().putString(KEY_PLAYLISTS, merged.toString()).apply();
-    }
-
-    private JSONObject buildPlaylistJson(String title, String safeSource, String safeDir,
-                                         EpisodeItem item, long positionMs) {
-        JSONObject obj = new JSONObject();
-        try {
-            obj.put("title", title);
-            obj.put("connectionName", connectionName);
-            obj.put("sourceUrl", safeSource);
-            obj.put("dirPath", safeDir);
-            obj.put("username", username);
-            obj.put("password", password);
-            obj.put("lastEpisodeName", item.name);
-            obj.put("lastEpisodePath", normalizeFilePath(item.path));
-            obj.put("lastEpisodePositionMs", Math.max(0L, positionMs));
-            obj.put("createdAt", System.currentTimeMillis());
-        } catch (JSONException ignored) { }
-        return obj;
+        progressExecutor.execute(() -> PlaylistStore.saveProgress(this, new PlaylistStore.Playlist(
+                title, connectionName, finalSafeSource, username, password, finalSafeDir,
+                item.name, normalizeFilePath(item.path), Math.max(0L, positionMs),
+                System.currentTimeMillis())));
     }
 
     private void loadPlayerPreferences() {
@@ -1041,17 +998,12 @@ public class PlayerActivity extends Activity {
     }
 
     private CIFSContext buildContext() {
-        if (TextUtils.isEmpty(username) && TextUtils.isEmpty(password)) return SingletonContext.getInstance();
-        return SingletonContext.getInstance().withCredentials(new NtlmPasswordAuthenticator("", username, password));
+        return SmbContexts.withCredentials(username, password);
     }
 
     private String normalizeFilePath(String raw) { return TextUtils.isEmpty(raw) ? "" : removeTrailingSlash(removeSmbUserInfo(raw)); }
     private String valueOrEmpty(@Nullable String value) { return value == null ? "" : value; }
-    private String extractFileName(String path) {
-        if (TextUtils.isEmpty(path)) return "";
-        int slash = path.lastIndexOf('/');
-        return slash < 0 || slash + 1 >= path.length() ? path : path.substring(slash + 1);
-    }
+    private String extractFileName(String path) { return SmbUrls.fileName(path); }
     private String extractDirectoryName(String src, String dir) {
         Uri uri = Uri.parse(dir);
         if (uri == null || TextUtils.isEmpty(uri.getPath())) return TextUtils.isEmpty(src) ? "未命名目录" : src;
@@ -1059,14 +1011,9 @@ public class PlayerActivity extends Activity {
         int slash = path.lastIndexOf('/');
         return slash < 0 || slash + 1 >= path.length() ? path : path.substring(slash + 1);
     }
-    private String removeTrailingSlash(String raw) { return !TextUtils.isEmpty(raw) && raw.endsWith("/") ? raw.substring(0, raw.length() - 1) : valueOrEmpty(raw); }
-    private String ensureSmbDir(String raw) { return TextUtils.isEmpty(raw) || raw.endsWith("/") ? valueOrEmpty(raw) : raw + "/"; }
-    private String removeSmbUserInfo(String url) {
-        Uri uri = Uri.parse(url);
-        if (uri == null || TextUtils.isEmpty(uri.getHost())) return url;
-        String port = uri.getPort() > 0 ? ":" + uri.getPort() : "";
-        return "smb://" + uri.getHost() + port + (TextUtils.isEmpty(uri.getPath()) ? "/" : uri.getPath());
-    }
+    private String removeTrailingSlash(String raw) { return SmbUrls.removeTrailingSlash(raw); }
+    private String ensureSmbDir(String raw) { return SmbUrls.ensureTrailingSlash(raw); }
+    private String removeSmbUserInfo(String url) { return SmbUrls.stripUserInfo(url); }
     private String formatMs(long ms) {
         long seconds = Math.max(0L, ms / 1000L);
         long hours = seconds / 3600L;

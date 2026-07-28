@@ -59,6 +59,8 @@ jobs:
           echo "name=$version" >> "$GITHUB_OUTPUT"
           echo "code=$code" >> "$GITHUB_OUTPUT"
           echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+      - name: Run unit tests
+        run: gradle testReleaseUnitTest
       - name: Build signed release APK
         run: >-
           gradle
