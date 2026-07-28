@@ -110,15 +110,19 @@ jobs:
           release="$(
             curl --fail --silent --show-error \
               -H "Authorization: token $GITEE_ACCESS_TOKEN" \
-              "$api/releases/tags/$GITHUB_REF_NAME" ||
-            curl --fail-with-body --silent --show-error \
+              "$api/releases/tags/$GITHUB_REF_NAME"
+          )"
+          if ! release_id="$(jq -er '.id' <<< "$release")"; then
+            release="$(
+              curl --fail-with-body --silent --show-error \
               -X POST \
               -H "Authorization: token $GITEE_ACCESS_TOKEN" \
               -H "Content-Type: application/json" \
               --data "$payload" \
               "$api/releases"
-          )"
-          release_id="$(jq -er '.id' <<< "$release")"
+            )"
+            release_id="$(jq -er '.id' <<< "$release")"
+          fi
           attachments="$(
             curl --fail --silent --show-error \
               -H "Authorization: token $GITEE_ACCESS_TOKEN" \
