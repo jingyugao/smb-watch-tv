@@ -86,63 +86,8 @@ jobs:
           GITEE_ACCESS_TOKEN: ${{ secrets.GITEE_ACCESS_TOKEN }}
           GITEE_OWNER: ggyy00
           GITEE_REPO: smb-watch-tv
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_VERSION: ${{ steps.version.outputs.name }}
           PRERELEASE: ${{ steps.version.outputs.prerelease }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          [[ -n "$GITEE_ACCESS_TOKEN" ]]
-
-          api="https://gitee.com/api/v5/repos/$GITEE_OWNER/$GITEE_REPO"
-          payload="$(
-            jq -n \
-              --arg tag "$GITHUB_REF_NAME" \
-              --arg name "$GITHUB_REF_NAME" \
-              --arg body "Mirrored from GitHub release $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$GITHUB_REF_NAME" \
-              --argjson prerelease "$PRERELEASE" \
-              '{
-                tag_name: $tag,
-                name: $name,
-                body: $body,
-                prerelease: $prerelease,
-                target_commitish: "master"
-              }'
-          )"
-          release="$(
-            curl --fail --silent --show-error \
-              -H "Authorization: token $GITEE_ACCESS_TOKEN" \
-              "$api/releases/tags/$GITHUB_REF_NAME"
-          )"
-          if ! release_id="$(jq -er '.id' <<< "$release")"; then
-            release="$(
-              curl --fail-with-body --silent --show-error \
-              -X POST \
-              -H "Authorization: token $GITEE_ACCESS_TOKEN" \
-              -H "Content-Type: application/json" \
-              --data "$payload" \
-              "$api/releases"
-            )"
-            release_id="$(jq -er '.id' <<< "$release")"
-          fi
-          attachments="$(
-            curl --fail --silent --show-error \
-              -H "Authorization: token $GITEE_ACCESS_TOKEN" \
-              "$api/releases/$release_id/attach_files"
-          )"
-
-          apk=(app/build/outputs/apk/release/*.apk)
-          checksum="app/build/outputs/apk/release/smb-watch-tv-${{ steps.version.outputs.name }}.sha256"
-          for artifact in "${apk[0]}" "$checksum"; do
-            name="$(basename "$artifact")"
-            if jq -e --arg name "$name" 'any(.[]; .name == $name)' <<< "$attachments" >/dev/null; then
-              continue
-            fi
-            curl --fail-with-body --silent --show-error \
-              --http1.1 \
-              --connect-timeout 15 \
-              --max-time 180 \
-              -X POST \
-              -H "Authorization: token $GITEE_ACCESS_TOKEN" \
-              -H "Expect:" \
-              -F "file=@$artifact" \
-              "$api/releases/$release_id/attach_files" >/dev/null
-          done
+          ARTIFACT_DIR: app/build/outputs/apk/release
+        run: scripts/publish-gitee-update.sh
