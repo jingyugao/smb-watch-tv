@@ -137,8 +137,12 @@ jobs:
               continue
             fi
             curl --fail-with-body --silent --show-error \
+              --http1.1 \
+              --connect-timeout 15 \
+              --max-time 180 \
               -X POST \
               -H "Authorization: token $GITEE_ACCESS_TOKEN" \
+              -H "Expect:" \
               -F "file=@$artifact" \
               "$api/releases/$release_id/attach_files" >/dev/null
           done
