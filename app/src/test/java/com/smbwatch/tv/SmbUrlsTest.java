@@ -40,6 +40,22 @@ public class SmbUrlsTest {
     }
 
     @Test
+    public void portOfUsesExplicitOrDefaultPort() {
+        assertEquals(445, SmbUrls.portOf("smb://host/share", 445));
+        assertEquals(1445, SmbUrls.portOf("smb://host:1445/share", 445));
+        assertEquals(445, SmbUrls.portOf("smb://host:99999/share", 445));
+        assertEquals(445, SmbUrls.portOf("invalid", 445));
+    }
+
+    @Test
+    public void hasSharePathDistinguishesServerRoot() {
+        assertFalse(SmbUrls.hasSharePath("smb://host"));
+        assertFalse(SmbUrls.hasSharePath("smb://host/"));
+        assertTrue(SmbUrls.hasSharePath("smb://host/media"));
+        assertTrue(SmbUrls.hasSharePath("smb://host/media/folder/"));
+    }
+
+    @Test
     public void parentDirectoryWalksUpOneLevel() {
         assertEquals("smb://h/share/a/", SmbUrls.parentDirectory("smb://h/share/a/b.mkv"));
         assertEquals("smb://h/", SmbUrls.parentDirectory("smb://h/x.mkv"));

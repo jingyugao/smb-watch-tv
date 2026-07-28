@@ -28,7 +28,9 @@ final class SmbContexts {
     }
 
     static CIFSContext withCredentials(String username, String password) {
-        if (TextUtils.isEmpty(username) && TextUtils.isEmpty(password)) return get();
+        if (TextUtils.isEmpty(username) && TextUtils.isEmpty(password)) {
+            return get().withAnonymousCredentials();
+        }
         return get().withCredentials(
                 new NtlmPasswordAuthenticator("", username, password == null ? "" : password));
     }
@@ -42,6 +44,8 @@ final class SmbContexts {
         properties.setProperty("jcifs.smb.client.transactionBufferSize", String.valueOf(1024 * 1024));
         properties.setProperty("jcifs.smb.client.responseTimeout", "20000");
         properties.setProperty("jcifs.smb.client.soTimeout", "25000");
+        // 错误账号不能静默降级成 Guest，否则“测试连接”会误报认证成功。
+        properties.setProperty("jcifs.smb.client.allowGuestFallback", "false");
         // 匿名访问时优先猜测匿名而不是弹认证
         properties.setProperty("jcifs.smb.client.ipcSigningEnforced", "false");
         try {

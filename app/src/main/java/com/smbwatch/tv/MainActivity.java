@@ -2,12 +2,19 @@ package com.smbwatch.tv;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.ActivityNotFoundException;
+import android.content.ClipData;
 import android.content.Intent;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Bitmap;
+import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.provider.Settings;
 import android.text.TextUtils;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -21,6 +28,9 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.core.content.FileProvider;
+
+import java.io.File;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -33,14 +43,23 @@ import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+import jcifs.Address;
+import jcifs.CIFSContext;
+import jcifs.smb.SmbAuthException;
 import jcifs.smb.SmbFile;
 
 public class MainActivity extends Activity {
 
     private static final int REQ_BROWSE_SMB = 2001;
+    private static final int REQ_INSTALL_UNKNOWN_APPS = 2002;
     private static final int TAB_RECENT = 0;
     private static final int TAB_PLAYLIST = 1;
     private static final int TAB_SMB = 2;
+    private static final String UPDATE_PREFS = "update_preferences";
+    private static final String KEY_LAST_UPDATE_CHECK = "last_update_check";
+    private static final String STATE_PENDING_UPDATE_APK = "pending_update_apk";
+    private static final String STATE_WAITING_INSTALL_PERMISSION = "waiting_install_permission";
+    private static final long AUTO_UPDATE_CHECK_INTERVAL_MS = 6L * 60L * 60L * 1000L;
 
     public static final String DEFAULT_USERNAME = "";
     public static final String DEFAULT_PASSWORD = "";
@@ -57,6 +76,7 @@ public class MainActivity extends Activity {
     private Button btnDiscoverSmb;
     private Button btnCleanInvalidPlaylists;
     private Button btnRemoteControl;
+    private Button btnCheckUpdate;
     private Button btnTabRecent;
     private Button btnTabPlaylist;
     private Button btnTabSmb;
@@ -76,6 +96,10 @@ public class MainActivity extends Activity {
     private boolean isTestingConnection;
     private boolean isCleaningPlaylists;
     private SmbDiscovery smbDiscovery;
+    private AppUpdateManager appUpdateManager;
+    private File pendingUpdateApk;
+    private boolean waitingForInstallPermission;
+    private boolean updateBusy;
     private final Map<String, SmbDiscovery.Device> discoveredDevices = new LinkedHashMap<>();
     private int selectedTab = TAB_RECENT;
 
@@ -98,12 +122,20 @@ public class MainActivity extends Activity {
         btnDiscoverSmb = findViewById(R.id.btn_discover_smb);
         btnCleanInvalidPlaylists = findViewById(R.id.btn_clean_invalid_playlists);
         btnRemoteControl = findViewById(R.id.btn_remote_control);
+        btnCheckUpdate = findViewById(R.id.btn_check_update);
         btnTabRecent = findViewById(R.id.btn_tab_recent);
         btnTabPlaylist = findViewById(R.id.btn_tab_playlist);
         btnTabSmb = findViewById(R.id.btn_tab_smb);
         sectionRecent = findViewById(R.id.section_recent);
         sectionPlaylists = findViewById(R.id.section_playlists);
         sectionSmb = findViewById(R.id.section_smb);
+        appUpdateManager = new AppUpdateManager(this);
+        if (savedInstanceState != null) {
+            String pendingPath = savedInstanceState.getString(STATE_PENDING_UPDATE_APK, "");
+            if (!TextUtils.isEmpty(pendingPath)) pendingUpdateApk = new File(pendingPath);
+            waitingForInstallPermission =
+                    savedInstanceState.getBoolean(STATE_WAITING_INSTALL_PERMISSION, false);
+        }
 
         if (TextUtils.isEmpty(etSmbUsername.getText())) {
             etSmbUsername.setText(DEFAULT_USERNAME);
@@ -147,6 +179,7 @@ public class MainActivity extends Activity {
         btnDiscoverSmb.setOnClickListener(v -> startSmbDiscovery());
         btnCleanInvalidPlaylists.setOnClickListener(v -> cleanInvalidPlaylists());
         btnRemoteControl.setOnClickListener(v -> showRemoteControl());
+        btnCheckUpdate.setOnClickListener(v -> checkForUpdates(true));
         RemoteControlManager.get(this).setLibraryChangeListener(() -> {
             reloadDataFromStorage();
             refreshConnections();
@@ -210,6 +243,7 @@ public class MainActivity extends Activity {
         } else {
             btnTabRecent.requestFocus();
         }
+        mainHandler.postDelayed(() -> checkForUpdates(false), 1500L);
     }
 
     private void openBrowser(PlaylistStore.Connection conn) {
@@ -249,6 +283,17 @@ public class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQ_INSTALL_UNKNOWN_APPS) {
+            if (waitingForInstallPermission) {
+                if (canInstallUnknownApps()) {
+                    resumePendingInstall();
+                } else {
+                    waitingForInstallPermission = false;
+                    toast("需要允许此应用安装更新");
+                }
+            }
+            return;
+        }
         if (requestCode != REQ_BROWSE_SMB || resultCode != RESULT_OK || data == null) {
             return;
         }
@@ -418,11 +463,23 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        if (waitingForInstallPermission && canInstallUnknownApps()) {
+            resumePendingInstall();
+        }
         reloadDataFromStorage();
         refreshConnections();
         refreshPlaylists();
         refreshRecentPlaylists();
         showTab(selectedTab);
+    }
+
+    @Override
+    protected void onSaveInstanceState(Bundle outState) {
+        super.onSaveInstanceState(outState);
+        if (pendingUpdateApk != null) {
+            outState.putString(STATE_PENDING_UPDATE_APK, pendingUpdateApk.getAbsolutePath());
+        }
+        outState.putBoolean(STATE_WAITING_INSTALL_PERMISSION, waitingForInstallPermission);
     }
 
     @Override
@@ -579,7 +636,16 @@ public class MainActivity extends Activity {
             boolean ok = TextUtils.isEmpty(msg);
             mainHandler.post(() -> {
                 if (ok) {
-                    tvStatus.setText("测试成功：SMB 端口可达（内网校验通过）");
+                    boolean anonymous = TextUtils.isEmpty(user) && TextUtils.isEmpty(pass);
+                    if (SmbUrls.hasSharePath(finalUrl)) {
+                        tvStatus.setText(anonymous
+                                ? "测试成功：匿名登录成功，共享目录可访问"
+                                : "测试成功：账号密码正确，共享目录可访问");
+                    } else {
+                        tvStatus.setText(anonymous
+                                ? "测试成功：服务器允许匿名登录"
+                                : "测试成功：账号密码正确");
+                    }
                 } else {
                     tvStatus.setText("测试失败：" + msg);
                 }
@@ -686,20 +752,50 @@ public class MainActivity extends Activity {
         try {
             requireLocalNetwork(smbUrl);
             String host = extractHost(smbUrl);
-            if (!canReachSmbPort(host, 445, 3000)) {
-                return "SMB 端口不可达（445）";
+            int port = SmbUrls.portOf(smbUrl, 445);
+            if (!canReachSmbPort(host, port, 3000)) {
+                return "SMB 端口不可达（" + port + "）";
             }
-            SmbFile root = new SmbFile(SmbUrls.ensureTrailingSlash(smbUrl),
-                    SmbContexts.withCredentials(username, password));
-            if (!root.exists() || !root.isDirectory()) {
-                return "SMB 地址无效或账号无权访问";
+
+            CIFSContext context = SmbContexts.withCredentials(username, password);
+            Address address = context.getNameServiceClient().getByName(host);
+            try {
+                context.getTransportPool().logon(context, address, port);
+            } catch (SmbAuthException e) {
+                return TextUtils.isEmpty(username) && TextUtils.isEmpty(password)
+                        ? "服务器不允许匿名登录"
+                        : "用户名或密码错误";
+            } catch (Exception e) {
+                return "SMB 登录失败：" + exceptionMessage(e);
             }
-            root.listFiles();
+
+            // 只输入主机时，登录成功就足以证明账号密码有效。
+            if (!SmbUrls.hasSharePath(smbUrl)) {
+                return "";
+            }
+
+            // 填写了共享路径时，再单独验证该账号能否浏览目标目录。
+            try (SmbFile root = new SmbFile(
+                    SmbUrls.ensureTrailingSlash(smbUrl), context)) {
+                root.connect();
+                if (!root.exists() || !root.isDirectory()) {
+                    return "账号密码正确，但共享目录不存在或不是文件夹";
+                }
+                root.listFiles();
+            } catch (SmbAuthException e) {
+                return "账号密码正确，但无权访问共享目录";
+            } catch (Exception e) {
+                return "账号密码正确，但共享目录访问失败：" + exceptionMessage(e);
+            }
             return "";
         } catch (Exception e) {
-            String message = e.getMessage();
-            return TextUtils.isEmpty(message) ? "认证失败或无权浏览共享目录" : message;
+            return exceptionMessage(e);
         }
+    }
+
+    private String exceptionMessage(Exception error) {
+        String message = error.getMessage();
+        return TextUtils.isEmpty(message) ? error.getClass().getSimpleName() : message;
     }
 
     private String validateLocalNetwork(String smbUrl) {
@@ -926,6 +1022,192 @@ public class MainActivity extends Activity {
         Toast.makeText(this, msg, Toast.LENGTH_SHORT).show();
     }
 
+    private void checkForUpdates(boolean userInitiated) {
+        if (updateBusy || appUpdateManager == null) {
+            if (userInitiated) toast("正在处理更新，请稍候");
+            return;
+        }
+        long now = System.currentTimeMillis();
+        long lastCheck = getSharedPreferences(UPDATE_PREFS, MODE_PRIVATE)
+                .getLong(KEY_LAST_UPDATE_CHECK, 0L);
+        if (!userInitiated && now - lastCheck < AUTO_UPDATE_CHECK_INTERVAL_MS) return;
+        getSharedPreferences(UPDATE_PREFS, MODE_PRIVATE).edit()
+                .putLong(KEY_LAST_UPDATE_CHECK, now)
+                .apply();
+
+        setUpdateBusy(true, getString(R.string.btn_checking_update));
+        String currentVersionName = currentVersionName();
+        boolean includePrereleases = currentVersionName.contains("-");
+        appUpdateManager.check(includePrereleases, currentVersionCode(),
+                new AppUpdateManager.Listener() {
+                    @Override
+                    public void onNoUpdate() {
+                        setUpdateBusy(false, getString(R.string.btn_check_update));
+                        if (userInitiated) {
+                            tvStatus.setText(getString(
+                                    R.string.status_update_latest, currentVersionName));
+                            toast("当前已是最新版本");
+                        }
+                    }
+
+                    @Override
+                    public void onUpdateAvailable(AppUpdateManager.Release release) {
+                        setUpdateBusy(false, getString(R.string.btn_check_update));
+                        showUpdateDialog(release);
+                    }
+
+                    @Override
+                    public void onDownloadProgress(int percent) { }
+
+                    @Override
+                    public void onDownloadReady(File apk) { }
+
+                    @Override
+                    public void onError(String message) {
+                        setUpdateBusy(false, getString(R.string.btn_check_update));
+                        if (userInitiated) {
+                            tvStatus.setText(getString(
+                                    R.string.status_update_check_failed, message));
+                            toast("检查更新失败");
+                        }
+                    }
+                });
+    }
+
+    private void showUpdateDialog(AppUpdateManager.Release release) {
+        if (isFinishing() || isDestroyed()) return;
+        StringBuilder message = new StringBuilder(getString(
+                R.string.dialog_update_versions, currentVersionName(), release.tagName));
+        if (release.apkSize > 0L) {
+            message.append(getString(
+                    R.string.dialog_update_size, release.apkSize / 1024d / 1024d));
+        }
+        if (release.prerelease) message.append(getString(R.string.dialog_update_prerelease));
+
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.dialog_update_title)
+                .setMessage(message.toString())
+                .setPositiveButton(R.string.dialog_update_now,
+                        (dialog, which) -> downloadUpdate(release))
+                .setNegativeButton(R.string.dialog_update_later, null)
+                .show();
+    }
+
+    private void downloadUpdate(AppUpdateManager.Release release) {
+        setUpdateBusy(true, getString(R.string.btn_downloading_update, 0));
+        tvStatus.setText(getString(R.string.status_update_downloading, release.tagName));
+        appUpdateManager.download(release, new AppUpdateManager.Listener() {
+            @Override
+            public void onNoUpdate() { }
+
+            @Override
+            public void onUpdateAvailable(AppUpdateManager.Release ignored) { }
+
+            @Override
+            public void onDownloadProgress(int percent) {
+                btnCheckUpdate.setText(getString(R.string.btn_downloading_update, percent));
+                tvStatus.setText(getString(R.string.status_update_progress, percent));
+            }
+
+            @Override
+            public void onDownloadReady(File apk) {
+                setUpdateBusy(false, getString(R.string.btn_check_update));
+                tvStatus.setText(R.string.status_update_ready);
+                installUpdate(apk);
+            }
+
+            @Override
+            public void onError(String message) {
+                setUpdateBusy(false, getString(R.string.btn_check_update));
+                tvStatus.setText(getString(R.string.status_update_failed, message));
+                toast("更新失败：" + message);
+            }
+        });
+    }
+
+    private void setUpdateBusy(boolean busy, String buttonText) {
+        updateBusy = busy;
+        if (btnCheckUpdate != null) {
+            btnCheckUpdate.setEnabled(!busy);
+            btnCheckUpdate.setText(buttonText);
+        }
+    }
+
+    private void installUpdate(File apk) {
+        if (apk == null || !apk.isFile()) {
+            toast("更新 APK 不存在");
+            return;
+        }
+        pendingUpdateApk = apk;
+        if (!canInstallUnknownApps()) {
+            waitingForInstallPermission = true;
+            Intent settings = new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    Uri.parse("package:" + getPackageName()));
+            try {
+                startActivityForResult(settings, REQ_INSTALL_UNKNOWN_APPS);
+            } catch (ActivityNotFoundException e) {
+                try {
+                    startActivityForResult(new Intent(Settings.ACTION_SECURITY_SETTINGS),
+                            REQ_INSTALL_UNKNOWN_APPS);
+                } catch (ActivityNotFoundException ignored) {
+                    waitingForInstallPermission = false;
+                    toast("请在系统设置中允许安装未知应用");
+                }
+            }
+            return;
+        }
+        launchPackageInstaller(apk);
+    }
+
+    private boolean canInstallUnknownApps() {
+        return Build.VERSION.SDK_INT < Build.VERSION_CODES.O
+                || getPackageManager().canRequestPackageInstalls();
+    }
+
+    private void resumePendingInstall() {
+        waitingForInstallPermission = false;
+        if (pendingUpdateApk != null) launchPackageInstaller(pendingUpdateApk);
+    }
+
+    private void launchPackageInstaller(File apk) {
+        try {
+            Uri uri = FileProvider.getUriForFile(
+                    this, getPackageName() + ".fileprovider", apk);
+            Intent install = new Intent(Intent.ACTION_VIEW);
+            install.setDataAndType(uri, "application/vnd.android.package-archive");
+            install.setClipData(ClipData.newRawUri("update", uri));
+            install.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivity(install);
+        } catch (Exception e) {
+            tvStatus.setText(getString(
+                    R.string.status_update_installer_failed, e.getMessage()));
+            toast("无法打开系统安装器");
+        }
+    }
+
+    private String currentVersionName() {
+        try {
+            String versionName = getPackageManager()
+                    .getPackageInfo(getPackageName(), 0).versionName;
+            return TextUtils.isEmpty(versionName) ? "未知" : versionName;
+        } catch (PackageManager.NameNotFoundException e) {
+            return "未知";
+        }
+    }
+
+    @SuppressWarnings("deprecation")
+    private int currentVersionCode() {
+        try {
+            PackageInfo info = getPackageManager().getPackageInfo(getPackageName(), 0);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                return (int) Math.min(Integer.MAX_VALUE, info.getLongVersionCode());
+            }
+            return info.versionCode;
+        } catch (PackageManager.NameNotFoundException e) {
+            return 0;
+        }
+    }
+
     private String connectionNameOf(String smbUrl) {
         String host = SmbUrls.hostOf(smbUrl);
         return TextUtils.isEmpty(host) ? "SMB" : host;
@@ -943,6 +1225,10 @@ public class MainActivity extends Activity {
         if (smbDiscovery != null) {
             smbDiscovery.close();
             smbDiscovery = null;
+        }
+        if (appUpdateManager != null) {
+            appUpdateManager.close();
+            appUpdateManager = null;
         }
         super.onDestroy();
         ioExecutor.shutdownNow();

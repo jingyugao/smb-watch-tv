@@ -59,11 +59,34 @@ final class SmbUrls {
         return authority;
     }
 
+    /** 提取显式端口；未填写或端口非法时返回 defaultPort。 */
+    static int portOf(String url, int defaultPort) {
+        String authorityAndPath = afterScheme(url);
+        if (authorityAndPath == null) return defaultPort;
+        int slash = authorityAndPath.indexOf('/');
+        String authority = slash < 0 ? authorityAndPath : authorityAndPath.substring(0, slash);
+        int at = authority.lastIndexOf('@');
+        if (at >= 0) authority = authority.substring(at + 1);
+        int colon = authority.lastIndexOf(':');
+        if (colon < 0 || colon + 1 >= authority.length()) return defaultPort;
+        try {
+            int port = Integer.parseInt(authority.substring(colon + 1));
+            return port >= 1 && port <= 65535 ? port : defaultPort;
+        } catch (NumberFormatException ignored) {
+            return defaultPort;
+        }
+    }
+
     static String pathOf(String url) {
         String authorityAndPath = afterScheme(url);
         if (authorityAndPath == null) return "";
         int slash = authorityAndPath.indexOf('/');
         return slash < 0 ? "" : authorityAndPath.substring(slash);
+    }
+
+    static boolean hasSharePath(String url) {
+        String path = removeTrailingSlash(pathOf(url));
+        return !isEmpty(path) && !"/".equals(path);
     }
 
     /** 目录路径大小写不敏感比较（都补全末尾斜杠）。 */
