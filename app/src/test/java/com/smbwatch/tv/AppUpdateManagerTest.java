@@ -58,6 +58,13 @@ public class AppUpdateManagerTest {
         assertNull(AppUpdateManager.checksumFrom("not a checksum"));
     }
 
+    @Test
+    public void releaseSizeIsUsedWhenDownloadResponseHasNoLength() {
+        assertEquals(4_372_543L, AppUpdateManager.effectiveTotalSize(-1L, 4_372_543L));
+        assertEquals(123L, AppUpdateManager.effectiveTotalSize(123L, 4_372_543L));
+        assertEquals(-1L, AppUpdateManager.effectiveTotalSize(-1L, 0L));
+    }
+
     private static String releasesJson() {
         return "["
                 + release("v1.5.0-beta.2", true)

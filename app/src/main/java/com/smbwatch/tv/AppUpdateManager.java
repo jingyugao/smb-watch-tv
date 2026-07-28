@@ -37,7 +37,9 @@ final class AppUpdateManager {
     interface Listener {
         void onNoUpdate();
         void onUpdateAvailable(Release release);
+        default void onDownloadPreparing() { }
         void onDownloadProgress(int percent);
+        default void onDownloadVerifying() { }
         void onDownloadReady(File apk);
         void onError(String message);
     }
@@ -90,6 +92,7 @@ final class AppUpdateManager {
         executor.execute(() -> {
             File partial = null;
             try {
+                post(listener::onDownloadPreparing);
                 if (isEmpty(release.checksumUrl)) {
                     throw new IllegalStateException("发布版本缺少 SHA-256 校验文件");
                 }
@@ -111,7 +114,9 @@ final class AppUpdateManager {
                     throw new IllegalStateException("无法清理上次未完成的下载");
                 }
 
-                String actualHash = downloadApk(release.apkUrl, partial, listener);
+                String actualHash = downloadApk(
+                        release.apkUrl, partial, release.apkSize, listener);
+                post(listener::onDownloadVerifying);
                 if (!expectedHash.equalsIgnoreCase(actualHash)) {
                     throw new SecurityException("APK SHA-256 校验失败");
                 }
@@ -222,12 +227,14 @@ final class AppUpdateManager {
         return matcher.find() ? matcher.group(1).toLowerCase(Locale.ROOT) : null;
     }
 
-    private String downloadApk(String url, File destination, Listener listener) throws Exception {
+    private String downloadApk(String url, File destination, long releaseSize,
+                               Listener listener) throws Exception {
         HttpURLConnection connection = open(url);
-        long total = contentLength(connection);
+        long total = effectiveTotalSize(contentLength(connection), releaseSize);
         MessageDigest digest = MessageDigest.getInstance("SHA-256");
         long downloaded = 0L;
         int lastPercent = -1;
+        post(() -> listener.onDownloadProgress(0));
         try (InputStream input = connection.getInputStream();
              FileOutputStream output = new FileOutputStream(destination)) {
             byte[] buffer = new byte[64 * 1024];
@@ -314,6 +321,11 @@ final class AppUpdateManager {
         } catch (NumberFormatException ignored) {
             return -1L;
         }
+    }
+
+    static long effectiveTotalSize(long responseLength, long releaseSize) {
+        if (responseLength > 0L) return responseLength;
+        return releaseSize > 0L ? releaseSize : -1L;
     }
 
     private static String hex(byte[] bytes) {

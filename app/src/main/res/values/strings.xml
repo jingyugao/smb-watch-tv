@@ -26,14 +26,19 @@
     <string name="status_update_latest">当前已是最新版本：%1$s</string>
     <string name="status_update_check_failed">检查更新失败：%1$s</string>
     <string name="status_update_downloading">正在下载 %1$s...</string>
+    <string name="status_update_preparing">正在获取更新校验信息...</string>
     <string name="status_update_progress">正在下载更新：%1$d%%</string>
+    <string name="status_update_verifying">正在验证安装包...</string>
     <string name="status_update_ready">更新下载并校验完成</string>
     <string name="status_update_failed">更新失败：%1$s</string>
     <string name="status_update_installer_failed">无法打开系统安装器：%1$s</string>
     <string name="dialog_update_title">发现新版本</string>
+    <string name="dialog_update_progress_title">正在更新</string>
+    <string name="dialog_update_failed_title">更新失败</string>
     <string name="dialog_update_versions">当前版本：%1$s\n新版本：%2$s</string>
     <string name="dialog_update_size">\n下载大小：%1$.1f MB</string>
     <string name="dialog_update_prerelease">\n\n这是测试版本。</string>
     <string name="dialog_update_now">立即更新</string>
+    <string name="dialog_update_retry">重试</string>
     <string name="dialog_update_later">稍后</string>
 </resources>

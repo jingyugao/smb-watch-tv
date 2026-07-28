@@ -97,6 +97,7 @@ public class MainActivity extends Activity {
     private boolean isCleaningPlaylists;
     private SmbDiscovery smbDiscovery;
     private AppUpdateManager appUpdateManager;
+    private AlertDialog updateProgressDialog;
     private File pendingUpdateApk;
     private boolean waitingForInstallPermission;
     private boolean updateBusy;
@@ -1096,6 +1097,7 @@ public class MainActivity extends Activity {
     private void downloadUpdate(AppUpdateManager.Release release) {
         setUpdateBusy(true, getString(R.string.btn_downloading_update, 0));
         tvStatus.setText(getString(R.string.status_update_downloading, release.tagName));
+        showUpdateProgressDialog();
         appUpdateManager.download(release, new AppUpdateManager.Listener() {
             @Override
             public void onNoUpdate() { }
@@ -1104,13 +1106,25 @@ public class MainActivity extends Activity {
             public void onUpdateAvailable(AppUpdateManager.Release ignored) { }
 
             @Override
+            public void onDownloadPreparing() {
+                setUpdateProgressMessage(R.string.status_update_preparing);
+            }
+
+            @Override
             public void onDownloadProgress(int percent) {
                 btnCheckUpdate.setText(getString(R.string.btn_downloading_update, percent));
                 tvStatus.setText(getString(R.string.status_update_progress, percent));
+                setUpdateProgressMessage(getString(R.string.status_update_progress, percent));
+            }
+
+            @Override
+            public void onDownloadVerifying() {
+                setUpdateProgressMessage(R.string.status_update_verifying);
             }
 
             @Override
             public void onDownloadReady(File apk) {
+                dismissUpdateProgressDialog();
                 setUpdateBusy(false, getString(R.string.btn_check_update));
                 tvStatus.setText(R.string.status_update_ready);
                 installUpdate(apk);
@@ -1118,11 +1132,50 @@ public class MainActivity extends Activity {
 
             @Override
             public void onError(String message) {
+                dismissUpdateProgressDialog();
                 setUpdateBusy(false, getString(R.string.btn_check_update));
                 tvStatus.setText(getString(R.string.status_update_failed, message));
-                toast("更新失败：" + message);
+                showUpdateErrorDialog(release, message);
             }
         });
+    }
+
+    private void showUpdateProgressDialog() {
+        dismissUpdateProgressDialog();
+        updateProgressDialog = new AlertDialog.Builder(this)
+                .setTitle(R.string.dialog_update_progress_title)
+                .setMessage(R.string.status_update_preparing)
+                .setCancelable(false)
+                .create();
+        updateProgressDialog.show();
+    }
+
+    private void setUpdateProgressMessage(int messageRes) {
+        setUpdateProgressMessage(getString(messageRes));
+    }
+
+    private void setUpdateProgressMessage(String message) {
+        if (updateProgressDialog != null && updateProgressDialog.isShowing()) {
+            updateProgressDialog.setMessage(message);
+        }
+    }
+
+    private void dismissUpdateProgressDialog() {
+        if (updateProgressDialog != null) {
+            updateProgressDialog.dismiss();
+            updateProgressDialog = null;
+        }
+    }
+
+    private void showUpdateErrorDialog(AppUpdateManager.Release release, String message) {
+        if (isFinishing() || isDestroyed()) return;
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.dialog_update_failed_title)
+                .setMessage(message)
+                .setPositiveButton(R.string.dialog_update_retry,
+                        (dialog, which) -> downloadUpdate(release))
+                .setNegativeButton(R.string.dialog_update_later, null)
+                .show();
     }
 
     private void setUpdateBusy(boolean busy, String buttonText) {
@@ -1230,6 +1283,7 @@ public class MainActivity extends Activity {
             appUpdateManager.close();
             appUpdateManager = null;
         }
+        dismissUpdateProgressDialog();
         super.onDestroy();
         ioExecutor.shutdownNow();
     }
